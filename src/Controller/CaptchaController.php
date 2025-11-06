@@ -26,36 +26,7 @@ class CaptchaController extends AbstractController
 
     #[Route('/api/captcha/generate', name: 'api_captcha_generate', methods: ['GET'])]
     #[OA\Get(
-        path: "/api/captcha/generate",
-        summary: "Neues CAPTCHA generieren",
-        description: "Gibt ein neues rotierbares CAPTCHA mit mehreren Bildteilen und deren Anfangsrotation zurück.",
-        tags: ["Captcha"],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: "CAPTCHA erfolgreich generiert",
-                content: new OA\JsonContent(
-                    type: "object",
-                    properties: [
-                        new OA\Property(property: "captchaId", type: "string", example: "captcha_64c3f88a9c43d"),
-                        new OA\Property(
-                            property: "imageParts",
-                            type: "array",
-                            items: new OA\Items(type: "string", format: "uri")
-                        ),
-                        new OA\Property(
-                            property: "initialRotations",
-                            type: "array",
-                            items: new OA\Items(type: "integer", example: 90)
-                        )
-                    ]
-                )
-            )
-        ]
-    )]
-    
-    #[OA\Get(
-        path: "/api/captcha/generate",
+       
         summary: "Neues CAPTCHA generieren",
         description: "Generiert ein neues CAPTCHA, speichert die Initialrotationen in der Session und liefert die Bildteile sowie die Startrotationen zurück.",
         tags: ["Captcha"],
@@ -85,9 +56,7 @@ class CaptchaController extends AbstractController
         ]
     )]
 
-
-    #[Route('/api/captcha/generate', name: 'api_captcha_generate', methods: ['GET'])]
-    public function generateCaptcha(SessionInterface $session): JsonResponse
+     public function generateCaptcha(SessionInterface $session): JsonResponse
     {
         $captchaData = $this->captchaGeneratorService->generateCaptchaImages();
 

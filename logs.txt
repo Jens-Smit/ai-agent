@@ -1,0 +1,517 @@
+docker compose up -d
+time="2025-11-06T13:58:24+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+[+] Running 6/6
+ ✔ Network ai-agent_agent_network     Created                                                                                   0.1s
+ ✔ Network ai-agent_executor_network  Created                                                                                   0.0s
+ ✔ Container db_agent                 Started                                                                                   0.4s
+ ✔ Container tool_executor            Started                                                                                   0.5s
+ ✘ Container agent_host               Error                                                                                    77.2s
+ ✔ Container nginx_agent              Created                                                                                   0.1s
+dependency failed to start: container agent_host is unhealthy
+PS C:\Projects\AI-agent> docker compose logs agent_host
+time="2025-11-06T14:00:23+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+agent_host  | [06-Nov-2025 12:58:25] NOTICE: fpm is running, pid 1
+agent_host  | [06-Nov-2025 12:58:25] NOTICE: ready to handle connections
+PS C:\Projects\AI-agent> docker compose exec agent_host sh -c "/usr/local/bin/health-check.sh || echo exit:$?"
+time="2025-11-06T14:00:25+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+sh: /usr/local/bin/health-check.sh: not found
+exit:True
+PS C:\Projects\AI-agent> docker compose ps --services --quiet
+time="2025-11-06T14:01:58+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+fb4dd31412de66cb1c233913e7fc035c7adec4132a4de3e6b918b4a2ebd7dd27
+2f380b4975d745839312f84834dd7cee18fe23ab09b54f14bd881db775a08b7d
+947d474ba76bf53a65e6c88796d67da74ddf61e306f4f4aa01043836bb1d7e91
+PS C:\Projects\AI-agent> docker ps --filter "name=agent_host" --no-trunc --format "{{.ID}} {{.Image}} {{.ImageID}}"
+failed to execute template: template: :1:21: executing "" at <.ImageID>: can't evaluate field ImageID in type *formatter.ContainerContext
+PS C:\Projects\AI-agent> docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | grep agent_host || true
+In Zeile:1 Zeichen:77
++ ... --format "{{.Repository}}:{{.Tag}} {{.ID}}" | grep agent_host || true
++                                                                   ~~
+Das Token "||" ist in dieser Version kein gültiges Anweisungstrennzeichen.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : InvalidEndOfLine
+
+PS C:\Projects\AI-agent> docker ps --filter "name=agent_host" --format "table {{.ID}}\t{{.Image}}"
+CONTAINER ID   IMAGE
+fb4dd31412de   ai-agent-agent_host
+PS C:\Projects\AI-agent> docker inspect --format '{{.Image}}' fb4dd31412de
+sha256:961082bc92036d8d515f8462ed997e9c55cbb3ab85bfd6ca465f0609dca17c94
+PS C:\Projects\AI-agent> docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | Select-String agent_host -SimpleMatch
+
+ai-agent-agent_host      latest    961082bc9203
+
+
+PS C:\Projects\AI-agent> docker run --rm --entrypoint ls ai-agent-agent_host -l /usr/local/bin
+total 18516
+-rwxr-xr-x    1 root     root           122 Oct  8 22:48 docker-php-entrypoint
+-rwxr-xr-x    1 root     root          1449 Oct  8 22:48 docker-php-ext-configure
+-rwxr-xr-x    1 root     root          2669 Oct  8 22:48 docker-php-ext-enable
+-rwxr-xr-x    1 root     root          2969 Oct  8 22:48 docker-php-ext-install
+-rwxr-xr-x    1 root     root           587 Oct  8 22:48 docker-php-source
+-rwxr-xr-x    1 root     root            88 Nov  6 11:51 health-check.sh
+-rwxr-xr-x    1 root     root           817 Oct  8 22:51 pear
+-rwxr-xr-x    1 root     root           838 Oct  8 22:51 peardev
+-rwxr-xr-x    1 root     root           751 Oct  8 22:51 pecl
+lrwxrwxrwx    1 root     root             9 Oct  8 22:51 phar -> phar.phar
+-rwxr-xr-x    1 root     root         15245 Oct  8 22:51 phar.phar
+-rwxr-xr-x    1 root     root      18892632 Oct  8 22:51 php
+-rwxr-xr-x    1 root     root          3018 Oct  8 22:51 php-config
+-rwxr-xr-x    1 root     root          4531 Oct  8 22:51 phpize
+PS C:\Projects\AI-agent> docker run --rm --entrypoint cat ai-agent-agent_host /usr/local/bin/health-check.sh
+#!/bin/sh
+php -r "echo 'PHP OK';" && \
+curl -f http://localhost/api/health || exit 1
+PS C:\Projects\AI-agent> docker compose exec agent_host sh -c "ls -la /usr/local/bin || true"
+time="2025-11-06T14:04:43+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+total 18532
+drwxr-xr-x    1 root     root          4096 Nov  6 12:58 .
+drwxr-xr-x    1 root     root          4096 Oct  8 22:51 ..
+-rwxr-xr-x    1 root     root           122 Oct  8 22:48 docker-php-entrypoint
+-rwxr-xr-x    1 root     root          1449 Oct  8 22:48 docker-php-ext-configure
+-rwxr-xr-x    1 root     root          2669 Oct  8 22:48 docker-php-ext-enable
+-rwxr-xr-x    1 root     root          2969 Oct  8 22:48 docker-php-ext-install
+-rwxr-xr-x    1 root     root           587 Oct  8 22:48 docker-php-source
+-rwxr-xr-x    1 root     root            88 Nov  6 11:51 health-check.sh
+-rwxr-xr-x    1 root     root           817 Oct  8 22:51 pear
+-rwxr-xr-x    1 root     root           838 Oct  8 22:51 peardev
+-rwxr-xr-x    1 root     root           751 Oct  8 22:51 pecl
+lrwxrwxrwx    1 root     root             9 Oct  8 22:51 phar -> phar.phar
+-rwxr-xr-x    1 root     root         15245 Oct  8 22:51 phar.phar
+-rwxr-xr-x    1 root     root      18892632 Oct  8 22:51 php
+-rwxr-xr-x    1 root     root          3018 Oct  8 22:51 php-config
+-rwxr-xr-x    1 root     root          4531 Oct  8 22:51 phpize
+PS C:\Projects\AI-agent> docker compose exec agent_host sh -c "mount | grep /usr/local/bin || true"
+time="2025-11-06T14:04:44+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+PS C:\Projects\AI-agent> docker compose exec agent_host sh -c "grep /usr/local/bin /proc/mounts || true"
+time="2025-11-06T14:04:44+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+PS C:\Projects\AI-agent> docker inspect --format '{{json .Mounts}}' agent_host | Out-String
+[{"Type":"bind","Source":"C:\\Projects\\AI-agent\\migrations","Destination":"/var/www/migrations","Mode":"rw","RW":true,"Propagation":"rprivate"},{"Type":"bind","Source":"C:\\Projects\\AI-agent\\composer.json","Destination":"/var/www/composer.json","Mode":"ro","RW":false,"Propagation":"rprivate"},{"Type":"bind","Source":"C:\\Projects\\AI-agent\\composer.lock","Destination":"/var/www/composer.lock","Mode":"ro","RW":false,"Propagation":"rprivate"},{"Type":"bind","Source":"C:\\Projects\\AI-agent\\src","Destination":"/var/www/src","Mode":"rw","RW":true,"Propagation":"rprivate"},{"Type":"bind","Source":"C:\\Projects\\AI-agent\\config","Destination":"/var/www/config","Mode":"rw","RW":true,"Propagation":"rprivate"},{"Type":"bind","Source":"C:\\Projects\\AI-agent\\var","Destination":"/var/www/var","Mode":"rw","RW":true,"Propagation":"rprivate"},{"Type":"bind","Source":"C:\\Projects\\AI-agent\\public","Destination":"/var/www/public","Mode":"rw","RW":true,"Propagation":"rprivate"},{"Type":"bind","Source":"C:\\Projects\\AI-agent\\tests","Destination":"/var/www/tests","Mode":"rw","RW":true,"Propagation":"rprivate"}]
+
+PS C:\Projects\AI-agent> docker compose exec agent_host sh -c "stat -c '%n %F %a %u:%g' /usr/local/bin/health-check.sh || echo missing"
+time="2025-11-06T14:05:00+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+/usr/local/bin/health-check.sh regular file 755 0:0
+PS C:\Projects\AI-agent> docker compose down
+time="2025-11-06T14:06:11+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+[+] Running 6/6
+ ✔ Container nginx_agent              Removed                                                                                   0.0s
+ ✔ Container tool_executor            Removed                                                                                   9.8s
+ ✔ Container agent_host               Removed                                                                                   0.7s
+ ✔ Container db_agent                 Removed                                                                                   1.8s
+ ✔ Network ai-agent_executor_network  Removed                                                                                   0.4s
+ ✔ Network ai-agent_agent_network     Removed                                                                                   0.9s
+PS C:\Projects\AI-agent> docker image rm ai-agent-agent_host
+Untagged: ai-agent-agent_host:latest
+Deleted: sha256:961082bc92036d8d515f8462ed997e9c55cbb3ab85bfd6ca465f0609dca17c94
+PS C:\Projects\AI-agent> docker compose build --no-cache agent_host
+time="2025-11-06T14:06:28+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+Compose can now delegate builds to bake for better performance.
+ To do so, set COMPOSE_BAKE=true.
+[+] Building 60.5s (8/21)                                                                                       docker:desktop-linux
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0s
+ => => transferring dockerfile: 5.59kB                                                                                          0.0s
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s
+ => [agent_host internal] load .dockerignore                                                                                    0.0s
+ => => transferring context: 156B                                                                                   [+] Building 60.6s (8/21)                                                                                       docker:desktop-linuxt_host internal] preparing inline document
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sinternal] load build context
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1sing context: 5.91kB
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => [agent_host internal] load .dockerignore                                                                                    0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => => transferring context: 156B                                                                                               0.0s Installing libatomic (14.2.0-r6)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing isl26 (0.26-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing mpc1 (1.3.1-r1)
+ => [agent_host internal] load build context                                                                        [+] Building 60.8s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 60.9s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 61.1s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 61.2s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 61.4s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 61.5s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 61.7s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 61.8s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 62.0s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 62.1s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 62.3s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 62.4s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 62.6s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 62.7s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 62.9s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 63.0s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 63.2s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 63.3s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 63.5s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 63.6s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 63.8s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 63.9s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 64.1s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 64.2s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 64.4s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 64.5s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 64.7s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 64.8s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 65.0s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 65.1s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 65.3s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 65.4s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 65.6s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 65.7s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 65.9s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 66.0s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 66.2s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 66.3s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 66.5s (8/21)                                                                                       docker:desktop-linuxing context: 5.91kB
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0st_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd
+ => => transferring dockerfile: 5.59kB                                                                                          0.0sphp_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s Installing libatomic (14.2.0-r6)
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s Installing gmp (6.3.0-r3)
+ => [agent_host internal] load .dockerignore                                                                                    0.0s Installing isl26 (0.26-r1)
+ => => transferring context: 156B                                                                                               0.0s Installing mpfr4 (4.2.1_p1-r0)
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s Installing mpc1 (1.3.1-r1)
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s Installing gcc (14.2.0-r6)
+ => [agent_host internal] load build context                                                                        [+] Building 114.[+] Building 226.1s (23/23) FINISHED                                                                            docker:desktop-linux
+ => [agent_host internal] load build definition from Dockerfile                                                                 0.0s
+ => => transferring dockerfile: 5.59kB                                                                                          0.0s
+ => [agent_host internal] load metadata for docker.io/library/composer:2                                                        1.1s
+ => [agent_host internal] load metadata for docker.io/library/php:8.2-fpm-alpine                                                0.9s
+ => [agent_host internal] load .dockerignore                                                                                    0.0s
+ => => transferring context: 156B                                                                                               0.0s
+ => CACHED [agent_host internal] preparing inline document                                                                      0.0s
+ => CACHED [agent_host php_base 1/5] FROM docker.io/library/php:8.2-fpm-alpine@sha256:f5cbb745950ec7ae49117fc1e326fddcd07ec2d0  0.0s
+ => [agent_host internal] load build context                                                                                    0.0s
+ => => transferring context: 5.91kB                                                                                             0.0s
+ => CACHED [agent_host] FROM docker.io/library/composer:2@sha256:5248900ab8b5f7f880c2d62180e40960cd87f60149ec9a1abfd62ac72a025  0.0s
+ => [agent_host php_base 2/5] RUN apk add --no-cache     ca-certificates     git     unzip     curl     libzip-dev     libpn  197.7s
+ => [agent_host php_base 3/5] COPY --from=composer:2 /usr/bin/composer /usr/bin/composer                                        0.1s
+ => [agent_host php_base 4/5] RUN {     echo 'opcache.enable=1';     echo 'opcache.memory_consumption=256';     echo 'opcache.  0.3s
+ => [agent_host php_base 5/5] WORKDIR /var/www                                                                                  0.0s
+ => [agent_host php_agent 1/9] RUN {     echo 'memory_limit=512M';     echo 'max_execution_time=300';     echo 'upload_max_fil  0.4s
+ => [agent_host php_agent 2/9] RUN printf "allow_url_fopen=1\ndisable_functions=\n" > /usr/local/etc/php/conf.d/zz_composer_bu  0.4s
+ => [agent_host php_agent 3/9] COPY --chown=www-data:www-data . /var/www/                                                       0.1s
+ => [agent_host php_agent 4/9] RUN mkdir -p /var/www/var     && chown -R www-data:www-data /var/www                             0.5s
+ => [agent_host php_agent 5/9] RUN composer install --no-dev --optimize-autoloader --no-scripts     && composer clear-cache    23.2s
+ => [agent_host php_agent 6/9] RUN php bin/console cache:warmup --env=prod || true                                              0.3s
+ => [agent_host php_agent 7/9] RUN chown -R www-data:www-data /var/www/var     && chmod -R 775 /var/www/var                     0.4s
+ => [agent_host php_agent 8/9] COPY <<EOF /usr/local/bin/health-check.sh                                                        0.0s
+ => [agent_host php_agent 9/9] RUN chmod +x /usr/local/bin/health-check.sh                                                      0.4s
+ => [agent_host] exporting to image                                                                                             0.9s
+ => => exporting layers                                                                                                         0.9s
+ => => writing image sha256:46a29aa09ba7ebd54ca9320cc69dab430290cb46d9d1e871d051ab47b3b57116                                    0.0s
+ => => naming to docker.io/library/ai-agent-agent_host                                                                          0.0s
+ => [agent_host] resolving provenance for metadata file                                                                         0.0s
+[+] Building 1/1
+ ✔ agent_host  Built                                                                                                            0.0s
+PS C:\Projects\AI-agent> docker compose up -d --force-recreate
+time="2025-11-06T14:10:15+01:00" level=warning msg="C:\\Projects\\AI-agent\\docker-compose.yaml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+[+] Running 6/6
+ ✔ Network ai-agent_executor_network  Created                                                                                   0.0s
+ ✔ Network ai-agent_agent_network     Created                                                                                   0.0s
+ ✔ Container db_agent                 Started                                                                                   0.5s
+ ✔ Container tool_executor            Started                                                                                   0.5s
+ ✘ Container agent_host               Error                                                                                    77.4s
+ ✔ Container nginx_agent              Created                                                                                   0.0s
+dependency failed to start: container agent_host is unhealthy
+PS

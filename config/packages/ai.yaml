@@ -1,0 +1,18 @@
+ai:
+  platform:
+    gemini:
+      api_key: '%env(GEMINI_API_KEY)%'
+
+  agent:
+    self_developing_agent:
+      # statt "platform: gemini" --> explizite Service-ID der Plattform nutzen
+      platform: ai.platform.contract.gemini
+      model: 'gemini-pro'
+      prompt:
+        text: |
+          Du bist ein...
+      tools:
+        services:
+          - name: analyze_filesystem
+            description: "Analysiert vorhandene Services"
+            service: App\Agent\Tool\FilesystemAnalyzerTool

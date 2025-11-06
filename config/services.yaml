@@ -12,6 +12,7 @@ services:
         autoconfigure: true
         bind:
             $appEnv: '%kernel.environment%'
+            $geminiApiKey: '%env(GEMINI_API_KEY)%'
     
     App\:
         resource: '../src/'
@@ -50,3 +51,8 @@ services:
         arguments:
             $contactFromEmail: '%env(CONTACT_FROM_EMAIL)%'
             $contactToEmail: '%env(CONTACT_TO_EMAIL)%'
+
+    App\Agent\Tool\FilesystemAnalyzerTool:
+        arguments:
+            # Wir injizieren den Symfony Parameter für das Projekt-Root-Verzeichnis
+            $projectDir: '%kernel.project_dir%'

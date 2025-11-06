@@ -11,6 +11,7 @@ nelmio_api_doc:
             license:
                 name: 'MIT'
                 url: 'https://opensource.org/licenses/MIT'
+    
     areas:
         default:
             path_patterns: [ ^/ ]  # Dokumentiert alle Routen

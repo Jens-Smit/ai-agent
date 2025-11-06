@@ -115,34 +115,25 @@ class AgentController extends AbstractController
      * Task-Status abrufen
      */
     #[Route('/task/{taskId}', name: 'task_status', methods: ['GET'])]
-    #[OA\Get(
-        path: '/api/agent/task/{taskId}',
-        summary: 'Task-Status abfragen',
-        tags: ['AI Agent'],
-        parameters: [
-            new OA\Parameter(
-                name: 'taskId',
-                in: 'path',
-                required: true,
-                schema: new OA\Schema(type: 'string')
-            )
-        ],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: 'Task-Status',
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: 'task_id', type: 'string'),
-                        new OA\Property(property: 'status', type: 'string', 
-                            enum: ['processing', 'awaiting_review', 'completed', 'failed']),
-                        new OA\Property(property: 'generated_files', type: 'array'),
-                        new OA\Property(property: 'test_results', type: 'object')
-                    ]
+    #[OA\Response(
+        response: 200,
+        description: "Task status list",
+        content: new OA\JsonContent(
+            type: "object",
+            properties: [
+                new OA\Property(
+                    property: "tasks",
+                    type: "array",
+                    items: new OA\Items(
+                        type: "object",
+                        properties: [
+                            new OA\Property(property: "id", type: "string"),
+                            new OA\Property(property: "status", type: "string"),
+                        ]
+                    )
                 )
-            ),
-            new OA\Response(response: 404, description: 'Task nicht gefunden')
-        ]
+            ]
+        )
     )]
     public function getTaskStatus(string $taskId): JsonResponse
     {

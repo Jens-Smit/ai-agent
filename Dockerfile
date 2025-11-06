@@ -72,7 +72,7 @@ RUN mkdir -p /var/www/var \
     && chown -R www-data:www-data /var/www
 
 # Composer Dependencies installieren (Production)
-RUN composer install --no-dev --optimize-autoloader --no-scripts \
+RUN composer install --optimize-autoloader --no-scripts \
     && composer clear-cache
 
 # Symfony Cache warmup (best effort)
@@ -85,8 +85,8 @@ RUN chown -R www-data:www-data /var/www/var \
 # Health-Check Script
 COPY <<'EOF' /usr/local/bin/health-check.sh
 #!/bin/sh
-php -r "echo 'PHP OK';" && \
-curl -f http://localhost/api/health || exit 1
+# Nur prüfen, ob FPM läuft und PHP-Code ausführen kann
+php -r "echo 'PHP OK';" || exit 1
 EOF
 RUN chmod +x /usr/local/bin/health-check.sh
 

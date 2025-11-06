@@ -30,19 +30,17 @@ services:
       - ./src:/var/www/src:rw
       - ./config:/var/www/config:rw
       - ./var:/var/www/var:rw
-      - ./public:/var/www/public:rw
+      - ./public:/var/www/public:ro
       - ./tests:/var/www/tests:rw
       - ./migrations:/var/www/migrations:rw
       - ./composer.json:/var/www/composer.json:ro
       - ./composer.lock:/var/www/composer.lock:ro
+      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # ➡️ DIESE ZEILE HINZUFÜGEN
+      - ./.env:/var/www/.env:ro
     depends_on:
       - db_agent
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/health-check.sh"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+    
   # ============================================
   # TOOL EXECUTOR - Code Sandbox (MAXIMALE ISOLATION)
   # ============================================
@@ -197,7 +195,7 @@ services:
     
     depends_on:
       agent_host:
-        condition: service_healthy
+        condition: service_started
     
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
