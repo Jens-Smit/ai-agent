@@ -1,0 +1,19 @@
+# config/packages/rate_limiter.yaml
+framework:
+    rate_limiter:
+        login_limiter:
+            policy: 'no_limit'
+            
+            
+        password_reset_limiter:
+            policy: 'no_limit'
+            
+            
+        token_refresh_limiter:
+            policy: 'no_limit'
+            
+            
+        api_general:
+            policy: 'no_limit'
+           
+   

@@ -1,0 +1,39 @@
+gesdinet_jwt_refresh_token:
+    # Time to live (7 Tage in Sekunden)
+    ttl: 604800
+    
+    # Automatisch abgelaufene Tokens löschen
+    ttl_update: true
+    
+   
+    
+    # Single Use: Token wird nach einmaliger Nutzung ungültig
+    single_use: true
+    
+    # Token im HttpOnly Cookie speichern
+    cookie:
+        enabled: true
+        same_site: lax
+        path: /
+        domain: null
+        http_only: true
+        secure: false  # true in Produktion mit HTTPS!
+        # ✅ Für ältere Bundle-Versionen:
+        remove_token_from_body: true
+        # HINWEIS: Der Cookie-Name wird über token_parameter_name gesteuert
+    
+    # Doctrine Entity Manager
+    manager_type: orm
+    
+    # ✅ WICHTIG: Dies definiert den Cookie-Namen ('refresh_token')
+    token_parameter_name: refresh_token
+    
+    # Return Refresh Token Expiration
+    return_expiration: true
+    return_expiration_parameter_name: refresh_token_expiration
+when@prod:
+    gesdinet_jwt_refresh_token:
+        cookie:
+            secure: true  # ✅ Nur HTTPS
+            same_site: 'strict'  # ✅ CSRF-Schutz erhöhen
+            http_only: true

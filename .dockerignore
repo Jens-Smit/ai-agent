@@ -1,0 +1,12 @@
+.git
+vendor
+node_modules
+tests
+*.log
+.env
+
+docker-compose.override.yml
+coverage
+__pycache__
+.idea
+.vscode

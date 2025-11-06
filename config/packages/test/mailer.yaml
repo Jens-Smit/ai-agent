@@ -1,0 +1,5 @@
+# config/packages/test/mailer.yaml
+framework:
+    mailer:
+        # wir nutzen den NullMailer in Tests
+        dsn: 'null://null'

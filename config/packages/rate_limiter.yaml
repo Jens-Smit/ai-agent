@@ -1,0 +1,24 @@
+# config/packages/rate_limiter.yaml
+framework:
+    rate_limiter:
+        login_limiter:
+            policy: 'sliding_window'
+            limit: 5
+            interval: '15 minutes'
+            # ✅ CRITICAL: Lock-out nach 5 Versuchen
+            lock_factory: 'lock.default.factory'
+            
+        password_reset_limiter:
+            policy: 'sliding_window'
+            limit: 3
+            interval: '1 hour'
+            
+        token_refresh_limiter:
+            policy: 'sliding_window'
+            limit: 20
+            interval: '1 hour'
+            
+        api_general:
+            policy: 'token_bucket'
+            limit: 100
+            rate: { interval: '1 minute', amount: 60 }

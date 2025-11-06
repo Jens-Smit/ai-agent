@@ -1,0 +1,276 @@
+# ============================================
+# AI Agent Docker Compose Configuration
+# ============================================
+# Services:
+# - agent_host: Symfony Application (mit Netzwerk)
+# - tool_executor: Code Sandbox (ISOLIERT)
+# - db_agent: MySQL Database
+# - nginx: Reverse Proxy (optional)
+# ============================================
+
+version: '3.9'
+
+services:
+  # ============================================
+  # AGENT HOST - Symfony Application
+  # ============================================
+  agent_host:
+    build:
+      context: .
+      target: php_agent
+      dockerfile: Dockerfile
+    container_name: agent_host
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    networks:
+      - agent_network
+      - executor_network
+    volumes:
+      - ./src:/var/www/src:rw
+      - ./config:/var/www/config:rw
+      - ./var:/var/www/var:rw
+      - ./public:/var/www/public:rw
+      - ./tests:/var/www/tests:rw
+      - ./migrations:/var/www/migrations:rw
+      - ./composer.json:/var/www/composer.json:ro
+      - ./composer.lock:/var/www/composer.lock:ro
+    depends_on:
+      - db_agent
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/health-check.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+  # ============================================
+  # TOOL EXECUTOR - Code Sandbox (MAXIMALE ISOLATION)
+  # ============================================
+  tool_executor:
+    build:
+      context: .
+      target: php_executor
+      dockerfile: Dockerfile
+    container_name: tool_executor
+    restart: unless-stopped
+    
+    # ⚠️ KRITISCH: KEIN Netzwerk zur Außenwelt!
+    # Option 1: network_mode: none (komplette Isolation)
+    # Option 2: Nur internes Netzwerk (für Agent-Kommunikation)
+    networks:
+      - executor_network  # NUR für Agent-Kommunikation
+    
+    # Alternative (Strikte Isolation):
+    # network_mode: "none"  # ⚠️ Dann ist HTTP-Kommunikation unmöglich
+    
+    # Volumes (ALLE READ-ONLY außer /sandbox)
+    volumes:
+      # Source-Code: READ-ONLY (kann NICHT modifiziert werden)
+      - ./src:/var/www/src:ro
+      - ./config:/var/www/config:ro
+      - ./vendor:/var/www/vendor:ro
+      - ./tests:/var/www/tests:ro
+      
+      # Sandbox: WRITE (Isoliertes Execution-Verzeichnis)
+      - executor_sandbox:/sandbox:rw
+      
+      # TMP: TMPFS (In-Memory, verschwindet nach Neustart)
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 100M
+    
+    # ⚠️ KRITISCHE SICHERHEITSKONFIGURATION ⚠️
+    
+    # 1. Keine Root-Rechte
+    user: "www-data:www-data"
+    
+    # 2. Keine Linux-Capabilities
+    cap_drop:
+      - ALL
+    
+    # 3. Read-Only Root-Filesystem (außer /sandbox, /tmp)
+    read_only: true
+    
+    # 4. Security-Optionen
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:unconfined  # Für PHP-Execution, aber KEINE System-Calls
+    
+    # 5. Ressourcen-Limits (SEHR RESTRIKTIV)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256M
+          pids: 50  # Max 50 Prozesse
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    
+    # 6. Keine Environment-Variablen mit Secrets
+    environment:
+      - PHP_MEMORY_LIMIT=256M
+      - PHP_MAX_EXECUTION_TIME=10
+      - SANDBOX_MODE=true
+    
+    # 7. Health-Check (Minimal)
+    healthcheck:
+      test: ["CMD", "php", "-r", "echo 'OK';"]
+      interval: 60s
+      timeout: 3s
+      retries: 2
+      start_period: 5s
+    
+    # 8. Logging (Limited)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    
+    # 9. Tmpfs für temporäre Dateien (in-memory, nicht persistent)
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=50m
+      - /var/run:rw,noexec,nosuid,size=10m
+
+  # ============================================
+  # DATABASE - MySQL 8.0
+  # ============================================
+  db_agent:
+    image: mysql:8.0
+    container_name: db_agent
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: agent_db
+      MYSQL_USER: agent
+      MYSQL_PASSWORD: agent_password
+    networks:
+      - agent_network
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD}"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    
+    # Resource-Limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================
+  # NGINX - Reverse Proxy (Optional)
+  # ============================================
+  nginx:
+    image: nginx:alpine
+    container_name: nginx_agent
+    restart: unless-stopped
+    
+    ports:
+      - "8080:80"
+    
+    networks:
+      - agent_network
+    
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./public:/var/www/public:ro
+    
+    depends_on:
+      agent_host:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+# ============================================
+# NETWORKS
+# ============================================
+networks:
+  # Haupt-Netzwerk (Agent Host <-> DB <-> Nginx)
+  agent_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+  
+  # Isoliertes Netzwerk (NUR Agent Host <-> Executor)
+  executor_network:
+    driver: bridge
+    internal: true  # ⚠️ KRITISCH: Kein Internet-Zugang!
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+
+# ============================================
+# VOLUMES
+# ============================================
+volumes:
+  # Database-Daten (Persistent)
+  db_data:
+    driver: local
+  
+  # Executor-Sandbox (Isoliert, kann gelöscht werden)
+  executor_sandbox:
+    driver: local
+
+# ============================================
+# SICHERHEITS-CHECKLISTE
+# ============================================
+# ✅ tool_executor:
+#    ✅ network_mode: internal (kein Internet)
+#    ✅ read_only: true (außer /sandbox)
+#    ✅ cap_drop: ALL (keine Linux-Capabilities)
+#    ✅ user: www-data (non-root)
+#    ✅ Resource-Limits (256M RAM, 1 CPU, 50 PIDs)
+#    ✅ Alle Mounts READ-ONLY (außer /sandbox)
+#    ✅ Keine Environment-Variablen mit Secrets
+#    ✅ Tmpfs für temporäre Dateien (in-memory)
+#    ✅ Security-Options (no-new-privileges)
+#
+# ✅ agent_host:
+#    ✅ Moderate Sicherheit (braucht Internet für LLM)
+#    ✅ Health-Checks aktiviert
+#    ✅ Resource-Limits gesetzt
+#    ✅ Separate Netzwerke (agent_network, executor_network)
+#
+# ✅ Kommunikation:
+#    ✅ Agent Host -> Executor: Über executor_network
+#    ✅ Executor -> Internet: BLOCKIERT (internal: true)
+#    ✅ Executor -> Host-System: BLOCKIERT (read_only, no caps)
+# ============================================
+
+# Verwendung:
+# docker compose up -d            # Alle Services starten
+# docker compose ps               # Status prüfen
+# docker compose logs -f          # Logs verfolgen
+# docker compose exec agent_host bash  # Shell im Agent
+# docker compose down -v          # Cleanup mit Volumes

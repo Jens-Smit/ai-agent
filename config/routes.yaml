@@ -1,0 +1,8 @@
+controllers:
+    resource: ../src/Controller/
+    type: attribute
+login:
+    path: /api/login
+    methods: [POST]
+api_refresh_token:
+    path: /api/token/refresh

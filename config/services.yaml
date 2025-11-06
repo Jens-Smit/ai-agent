@@ -1,0 +1,52 @@
+# Diese Datei ist der Einstiegspunkt für deine Service-Konfiguration
+# Dateien im packages/ Unterverzeichnis konfigurieren deine Abhängigkeiten
+
+parameters:
+    app.upload_directory: '%kernel.project_dir%/public/uploads'
+    app.api_url: 'http://127.0.0.1:8000'
+
+services:
+    # Standardkonfiguration für Services in dieser Datei
+    _defaults:
+        autowire: true
+        autoconfigure: true
+        bind:
+            $appEnv: '%kernel.environment%'
+    
+    App\:
+        resource: '../src/'
+        exclude:
+            - '../src/DependencyInjection/'
+            - '../src/Entity/'
+            - '../src/Kernel.php'
+            - '../tests/'
+
+    App\Controller\:
+        resource: '../src/Controller'
+        tags: ['controller.service_arguments']
+
+
+
+    App\Service\PostService:
+        arguments:
+            $em: '@Doctrine\ORM\EntityManagerInterface'
+            $projectDir: '%kernel.project_dir%'
+            $uploadDirectory: '%app.upload_directory%'
+            $slugger: '@slugger'
+            $apiUrl: '%env(API_URL)%'
+
+    # PasswordService mit konfigurierbarer Frontend-URL
+    App\Service\PasswordService:
+        arguments:
+            $frontendUrl: '%env(FRONTEND_URL)%'
+
+    # JWT Authenticator
+    App\Security\JwtTokenAuthenticator:
+        arguments:
+            $jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
+            $userProvider: '@security.user.provider.concrete.app_user_provider'
+   
+    App\Controller\ContactController:
+        arguments:
+            $contactFromEmail: '%env(CONTACT_FROM_EMAIL)%'
+            $contactToEmail: '%env(CONTACT_TO_EMAIL)%'
