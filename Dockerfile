@@ -82,15 +82,24 @@ RUN php bin/console cache:warmup --env=prod || true
 RUN chown -R www-data:www-data /var/www/var \
     && chmod -R 775 /var/www/var
 
-# Health-Check Script
+# Health-Check Script (nur PHP-FPM, kein Webserver nötig)
 COPY <<'EOF' /usr/local/bin/health-check.sh
 #!/bin/sh
-# Nur prüfen, ob FPM läuft und PHP-Code ausführen kann
+# Prüfe, ob PHP funktioniert
 php -r "echo 'PHP OK';" || exit 1
+
+# Prüfe, ob PHP-FPM läuft
+if ! pgrep -x php-fpm > /dev/null; then
+    echo "PHP-FPM not running"
+    exit 1
+fi
+
+echo "Health check passed"
+exit 0
 EOF
 RUN chmod +x /usr/local/bin/health-check.sh
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD /usr/local/bin/health-check.sh
 
 EXPOSE 80

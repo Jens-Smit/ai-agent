@@ -30,7 +30,7 @@ services:
       - ./src:/var/www/src:rw
       - ./config:/var/www/config:rw
       - ./var:/var/www/var:rw
-      - ./public:/var/www/public:ro
+      - ./public:/var/www/public:rw
       - ./tests:/var/www/tests:rw
       - ./migrations:/var/www/migrations:rw
       - ./composer.json:/var/www/composer.json:ro
@@ -40,6 +40,8 @@ services:
       - ./.env:/var/www/.env:ro
     depends_on:
       - db_agent
+    expose:
+      - "9000"
     
   # ============================================
   # TOOL EXECUTOR - Code Sandbox (MAXIMALE ISOLATION)
