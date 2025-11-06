@@ -1,18 +1,11 @@
-# Diese Datei ist der Einstiegspunkt für deine Service-Konfiguration
-# Dateien im packages/ Unterverzeichnis konfigurieren deine Abhängigkeiten
-
-parameters:
-    app.upload_directory: '%kernel.project_dir%/public/uploads'
-    app.api_url: 'http://127.0.0.1:8000'
-
 services:
-    # Standardkonfiguration für Services in dieser Datei
     _defaults:
         autowire: true
         autoconfigure: true
         bind:
             $appEnv: '%kernel.environment%'
             $geminiApiKey: '%env(GEMINI_API_KEY)%'
+            $projectDir: '%kernel.project_dir%'
     
     App\:
         resource: '../src/'
@@ -26,8 +19,45 @@ services:
         resource: '../src/Controller'
         tags: ['controller.service_arguments']
 
+    # ===== AI AGENT CONFIGURATION =====
+    
+    # Self-Developing Agent mit allen Dependencies
+    App\Agent\SelfDevelopingAgent:
+        arguments:
+            $httpClient: '@http_client'
+            $em: '@doctrine.orm.entity_manager'
+            $taskRepository: '@App\Repository\AgentTaskRepository'
+            $logger: '@logger'
+            $geminiApiKey: '%env(GEMINI_API_KEY)%'
+            $projectDir: '%kernel.project_dir%'
+        tags:
+            - { name: 'monolog.logger', channel: 'agent' }
 
+    # Agent Controller
+    App\Controller\AgentController:
+        arguments:
+            $agent: '@App\Agent\SelfDevelopingAgent'
+            $taskRepository: '@App\Repository\AgentTaskRepository'
 
+    # Agent Task Repository
+    App\Repository\AgentTaskRepository:
+        factory: ['@doctrine', 'getRepository']
+        arguments:
+            - 'App\Entity\AgentTask'
+
+    # ===== HTTP CLIENT (für Gemini API & Tool Executor) =====
+    http_client:
+        class: Symfony\Component\HttpClient\HttpClient
+        factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
+        arguments:
+            -
+                timeout: 60
+                max_redirects: 3
+                headers:
+                    'User-Agent': 'Symfony-AI-Agent/2.0'
+
+    # ===== EXISTING SERVICES =====
+    
     App\Service\PostService:
         arguments:
             $em: '@Doctrine\ORM\EntityManagerInterface'
@@ -36,12 +66,10 @@ services:
             $slugger: '@slugger'
             $apiUrl: '%env(API_URL)%'
 
-    # PasswordService mit konfigurierbarer Frontend-URL
     App\Service\PasswordService:
         arguments:
             $frontendUrl: '%env(FRONTEND_URL)%'
 
-    # JWT Authenticator
     App\Security\JwtTokenAuthenticator:
         arguments:
             $jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
@@ -52,7 +80,7 @@ services:
             $contactFromEmail: '%env(CONTACT_FROM_EMAIL)%'
             $contactToEmail: '%env(CONTACT_TO_EMAIL)%'
 
-    App\Agent\Tool\FilesystemAnalyzerTool:
-        arguments:
-            # Wir injizieren den Symfony Parameter für das Projekt-Root-Verzeichnis
-            $projectDir: '%kernel.project_dir%'
+    # ===== PARAMETERS =====
+parameters:
+    app.upload_directory: '%kernel.project_dir%/public/uploads'
+    app.api_url: '%env(API_URL)%'

@@ -26,6 +26,8 @@ services:
     networks:
       - agent_network
       - executor_network
+    environment:
+      PHP_MEMORY_LIMIT: 1024M
     volumes:
       - ./src:/var/www/src:rw
       - ./config:/var/www/config:rw
