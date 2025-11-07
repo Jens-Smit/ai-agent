@@ -23,7 +23,6 @@ class AgentController extends AbstractController
     #[MapRequestPayload] AgentPromptRequest $request
 ): JsonResponse {
     $task = $request->prompt;
-
     try {
         // Direkt den Prompt als UserMessage übergeben
         $messages = [new UserMessage($task)];
