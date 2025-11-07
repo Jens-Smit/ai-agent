@@ -25,16 +25,6 @@ services:
         resource: '../src/Controller'
         tags: ['controller.service_arguments']
 
-
-
-    App\Service\PostService:
-        arguments:
-            $em: '@Doctrine\ORM\EntityManagerInterface'
-            $projectDir: '%kernel.project_dir%'
-            $uploadDirectory: '%app.upload_directory%'
-            $slugger: '@slugger'
-            $apiUrl: '%env(API_URL)%'
-
     # PasswordService mit konfigurierbarer Frontend-URL
     App\Service\PasswordService:
         arguments:
@@ -46,7 +36,3 @@ services:
             $jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
             $userProvider: '@security.user.provider.concrete.app_user_provider'
    
-    App\Controller\ContactController:
-        arguments:
-            $contactFromEmail: '%env(CONTACT_FROM_EMAIL)%'
-            $contactToEmail: '%env(CONTACT_TO_EMAIL)%'

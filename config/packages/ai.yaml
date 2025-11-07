@@ -1,0 +1,11 @@
+ai:
+  platform:
+    gemini:
+      api_key: '%env(GEMINI_API_KEY)%'
+
+  agent:
+    default:
+
+      platform: 'ai.traceable_platform.gemini.inner'
+      model: gemini-1.5-flash
+      

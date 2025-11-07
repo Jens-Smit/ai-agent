@@ -4,7 +4,7 @@
   "type": "project",
   "license": "MIT",
   "description": "A skeleton to start a new Symfony website",
-  "minimum-stability": "stable",
+  "minimum-stability": "dev",
   "prefer-stable": true,
   "require": {
     "php": ">=8.2",
@@ -16,11 +16,17 @@
     "doctrine/orm": "^3.0",
     "ezyang/htmlpurifier": "^4.19",
     "gesdinet/jwt-refresh-token-bundle": "^1.5",
+    "google-gemini-php/symfony": "*",
     "lexik/jwt-authentication-bundle": "^3.0",
     "nelmio/api-doc-bundle": "^4.38",
     "nelmio/cors-bundle": "^2.5",
     "phpdocumentor/reflection-docblock": "^5.6",
     "phpstan/phpdoc-parser": "*",
+    "symfony/ai-agent": "dev-main",
+    "symfony/ai-bundle": "dev-main",
+    "symfony/ai-chat": "dev-main",
+    "symfony/ai-platform": "dev-main",
+    "symfony/ai-store": "dev-main",
     "symfony/apache-pack": "*",
     "symfony/asset": "7.3.*",
     "symfony/console": "7.3.*",
@@ -56,7 +62,7 @@
     "zircote/swagger-php": "^4.11"
   },
   "require-dev": {
-    "doctrine/doctrine-migrations-bundle": "^3.5",
+    "doctrine/doctrine-migrations-bundle": "^3.6",
     "phpunit/phpunit": "^9.6",
     "symfony/browser-kit": "7.3.*",
     "symfony/css-selector": "7.3.*",
@@ -70,7 +76,8 @@
     "allow-plugins": {
       "composer/package-versions-deprecated": true,
       "symfony/flex": true,
-      "symfony/runtime": true
+      "symfony/runtime": true,
+      "php-http/discovery": true
     },
     "optimize-autoloader": true,
     "preferred-install": {

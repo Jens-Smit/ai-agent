@@ -46,20 +46,32 @@ class SecurityHeadersListener implements EventSubscriberInterface
                 'max-age=31536000; includeSubDomains; preload'
             );
         }
-
-        // CSP
-        $response->headers->set(
-            'Content-Security-Policy',
-            "default-src 'none'; " .
-            "script-src 'self'; " .
-            "style-src 'self'; " .
-            "img-src 'self' data: https:; " .
-            "font-src 'self'; " .
-            "connect-src 'self'; " .
-            "frame-ancestors 'none'; " .
-            "base-uri 'self'; " .
-            "form-action 'self'"
-        );
+        if ($request->getPathInfo() === '/api/doc') {
+            // Swagger UI braucht Inline-Styles/Scripts
+            $response->headers->set(
+                'Content-Security-Policy',
+                "default-src 'self'; " .
+                "script-src 'self' 'unsafe-inline'; " .
+                "style-src 'self' 'unsafe-inline'; " .
+                "img-src 'self' data: https:; " .
+                "font-src 'self'; " .
+                "connect-src 'self';"
+            );
+        } else {
+            // CSP
+            $response->headers->set(
+                'Content-Security-Policy',
+                "default-src 'none'; " .
+                "script-src 'self'; " .
+                "style-src 'self'; " .
+                "img-src 'self' data: https:; " .
+                "font-src 'self'; " .
+                "connect-src 'self'; " .
+                "frame-ancestors 'none'; " .
+                "base-uri 'self'; " .
+                "form-action 'self'"
+            );
+        }       
 
         // Weitere Sicherheitsheader
         $response->headers->set('X-Content-Type-Options', 'nosniff');
