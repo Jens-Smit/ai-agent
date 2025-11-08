@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Jump and Run</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f0f0f0; }
+        #game-container {
+            width: 800px;
+            height: 400px;
+            background-color: #87ceeb;
+            border: 2px solid #333;
+            margin: 50px auto;
+            position: relative;
+            overflow: hidden;
+        }
+        #player {
+            width: 30px;
+            height: 50px;
+            background-color: #ff4500;
+            position: absolute;
+            bottom: 0;
+            left: 50px;
+        }
+        .obstacle {
+            width: 20px;
+            height: 40px;
+            background-color: #6b8e23;
+            position: absolute;
+            bottom: 0;
+            right: 0; /* Will be dynamically set */
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="player"></div>
+    </div>
+
+    <script>
+        const player = document.getElementById('player');
+        const gameContainer = document.getElementById('game-container');
+        let playerBottom = 0;
+        let isJumping = false;
+        let gravity = 0.9;
+        let jumpPower = 15;
+        let obstacleSpeed = 5;
+        let score = 0;
+
+        function jump() {
+            if (!isJumping) {
+                isJumping = true;
+                let initialJumpPower = jumpPower;
+
+                let upInterval = setInterval(() => {
+                    if (initialJumpPower > 0) {
+                        playerBottom += initialJumpPower;
+                        player.style.bottom = playerBottom + 'px';
+                        initialJumpPower -= gravity;
+                    } else {
+                        clearInterval(upInterval);
+                        let downInterval = setInterval(() => {
+                            if (playerBottom > 0) {
+                                playerBottom -= gravity;
+                                player.style.bottom = playerBottom + 'px';
+                                gravity += 0.1; // Increase gravity for faster fall
+                            } else {
+                                clearInterval(downInterval);
+                                playerBottom = 0;
+                                player.style.bottom = playerBottom + 'px';
+                                isJumping = false;
+                                gravity = 0.9; // Reset gravity
+                            }
+                        }, 20);
+                    }
+                }, 20);
+            }
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (event.code === 'Space') {
+                jump();
+            }
+        });
+
+        function createObstacle() {
+            const obstacle = document.createElement('div');
+            obstacle.classList.add('obstacle');
+            gameContainer.appendChild(obstacle);
+
+            let obstacleRight = -20; // Start off-screen to the right
+            let obstacleHeight = Math.random() * 60 + 20; // Random height between 20 and 80
+            obstacle.style.height = obstacleHeight + 'px';
+            obstacle.style.right = obstacleRight + 'px';
+            obstacle.style.bottom = '0px';
+
+            function moveObstacle() {
+                obstacleRight += obstacleSpeed;
+                obstacle.style.right = obstacleRight + 'px';
+
+                const playerRect = player.getBoundingClientRect();
+                const obstacleRect = obstacle.getBoundingClientRect();
+
+                // Collision detection
+                if (
+                    playerRect.right > obstacleRect.left &&
+                    playerRect.left < obstacleRect.right &&
+                    playerRect.bottom > obstacleRect.top
+                ) {
+                    alert('Game Over! Score: ' + score);
+                    location.reload(); // Restart game
+                }
+
+                if (obstacleRight > gameContainer.offsetWidth + 20) {
+                    // Obstacle passed, remove and create new
+                    obstacle.remove();
+                    score++;
+                } else {
+                    requestAnimationFrame(moveObstacle);
+                }
+            }
+            requestAnimationFrame(moveObstacle);
+        }
+
+        // Generate new obstacles periodically
+        setInterval(createObstacle, 2000); // Create a new obstacle every 2 seconds
+
+    </script>
+</body>
+</html>
