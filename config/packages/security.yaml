@@ -52,16 +52,11 @@ security:
         - { path: ^/api/password/request-reset$, roles: PUBLIC_ACCESS }
         - { path: ^/api/password/reset$, roles: PUBLIC_ACCESS }
         
-        # Kontaktformular & CAPTCHA
-        - { path: ^/api/contact$, roles: PUBLIC_ACCESS }
-        - { path: ^/api/captcha, roles: PUBLIC_ACCESS }
+        # AI Datei-Generierung (öffentlich zugänglich)
+        - { path: ^/api/generate-file, roles: PUBLIC_ACCESS }
+        - { path: ^/api/test-file-write, roles: PUBLIC_ACCESS }
         
-        # Öffentlicher Lesezugriff (GET) auf Posts
-        - { path: ^/api/posts$, roles: PUBLIC_ACCESS, methods: [GET] }
-        - { path: ^/api/posts/\d+$, roles: PUBLIC_ACCESS, methods: [GET] }
-        
-        # Öffentlicher Lesezugriff (GET) auf Kategorien
-        - { path: ^/api/categories, roles: PUBLIC_ACCESS, methods: [GET] }
+       
         
         # Health-Check (falls vorhanden)
         - { path: ^/health$, roles: PUBLIC_ACCESS }
