@@ -1,1 +1,0 @@
-This file was written directly via the test endpoint. If this file exists in "generated_code", your web server has the correct write permissions.

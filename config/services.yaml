@@ -4,6 +4,7 @@
 parameters:
     app.upload_directory: '%kernel.project_dir%/public/uploads'
     app.api_url: 'http://127.0.0.1:8000'
+    chroma.base_url: 'http://localhost:8000'
 
 services:
     # Standardkonfiguration für Services in dieser Datei
@@ -35,4 +36,21 @@ services:
         arguments:
             $jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
             $userProvider: '@security.user.provider.concrete.app_user_provider'
-   
+    
+    # CodeSaverTool
+    App\Tool\CodeSaverTool:
+        arguments:
+            $logger: '@logger'
+        tags:
+            - { name: 'ai.tool' }
+    
+    
+  
+
+    # KnowledgeIndexerTool
+    App\Tool\KnowledgeIndexerTool:
+        arguments:
+            $platform: '@ai.platform.gemini'  # Für Embeddings
+            $store: '@ai.store.memory.knowledge_base'
+            $logger: '@logger'
+        tags: ['ai.tool']

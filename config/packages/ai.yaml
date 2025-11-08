@@ -1,22 +1,50 @@
 ai:
   platform:
+    
     gemini:
       api_key: '%env(GEMINI_API_KEY)%'
 
-  agent:
-    default:
+  # Vectorizer für Embeddings
+  vectorizer:
+    knowledge_embeddings:
+      platform: 'ai.platform.gemini'
+      model:
+        name: 'text-embedding-004'
+        options:
+          dimensions: 768
 
-      platform: 'ai.traceable_platform.gemini.inner'
-      model: gemini-2.5-flash
-      prompt: |
-                Du bist ein strenger Programmier-Agent. Deine WICHTIGSTE Priorität
-                ist die korrekte Nutzung des 'write_file'-Tools.
-                
-                Wenn der Benutzer eine Datei speichern will (z.B. '.py', '.html' 
-                oder das Verb 'speichere' verwendet), dann MUSS das 'write_file' 
-                Tool aufgerufen werden.
-                
-                Es ist dir STRENGSTENS untersagt, Code-Blöcke (```python, ```html) 
-                im Chat auszugeben, wenn der Code gespeichert werden soll. Du musst 
-                den Code stattdessen als 'content' an das Tool übergeben.
-      
+  # Vector Store - InMemory für Tests (KEINE ChromaDB nötig!)
+  store:
+    memory:
+      knowledge_base:
+        strategy: 'cosine'
+
+  
+
+  # Agent mit RAG-Fähigkeiten
+  agent:
+    file_generator:
+      platform: 'ai.platform.gemini'
+      model: 'gemini-2.5-flash'
+      track_token_usage: true
+      prompt:
+        text: |
+          You are a file generation assistant with access to a knowledge base.
+          
+          WORKFLOW:
+          1. When asked to generate files, FIRST use the similarity_search tool to find relevant documentation
+          2. Use the retrieved knowledge to generate accurate, well-structured code
+          3. THEN use the save_code_file tool to save the generated file
+          4. After saving, respond ONLY with: "File created: [filename]"
+          
+          RULES:
+          - ALWAYS search the knowledge base before generating code
+          - Use documentation examples and best practices from the knowledge base
+          - Keep generated code clean and well-commented
+          - Follow the patterns shown in the documentation
+        include_tools: true
+      tools:
+        - 'App\Tool\CodeSaverTool'
+        - 'App\Tool\KnowledgeIndexerTool'
+        
+      fault_tolerant_toolbox: true
