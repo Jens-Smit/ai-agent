@@ -1,0 +1,23 @@
+# Dockerfile.sandbox
+# Base image with PHP-FPM
+FROM php:8.2-fpm-alpine
+
+# Install common extensions and git, zip, unzip for composer
+# libzip-dev is for the 'zip' extension which Composer sometimes needs.
+# pdo and pdo_mysql are common database extensions.
+RUN apk add --no-cache git unzip libzip-dev \
+    && docker-php-ext-install pdo pdo_mysql opcache zip \
+    && docker-php-ext-enable opcache
+
+# Install Composer
+# Copy from the official Composer image
+COPY --from=composer/composer:latest-bin /composer /usr/bin/composer
+
+# Set working directory inside the container
+WORKDIR /app
+
+# Expose port 9000 for FPM (if a web server would be connected, not strictly necessary for CLI execution)
+EXPOSE 9000
+
+# Default command for FPM. This will be overridden when we run specific commands.
+CMD ["php-fpm"]

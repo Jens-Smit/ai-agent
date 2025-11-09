@@ -7,5 +7,7 @@ use Symfony\Component\Validator\Constraints as Assert;
 class AgentPromptRequest
 {
     #[Assert\NotBlank]
-    public string $prompt;
+    #[Assert\Type('string')]
+    #[Assert\Length(min: 10, max: 2000)] // Example length constraints
+    public ?string $prompt = null;
 }

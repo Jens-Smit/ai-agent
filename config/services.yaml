@@ -44,7 +44,11 @@ services:
         tags:
             - { name: 'ai.tool' }
     
-    
+    # AnalyzeCodeTool
+    App\Tool\AnalyzeCodeTool:
+        autowire: true
+        autoconfigure: true
+        public: false   
   
 
     # KnowledgeIndexerTool
@@ -54,3 +58,12 @@ services:
             $store: '@ai.store.memory.knowledge_base'
             $logger: '@logger'
         tags: ['ai.tool']
+    # SandboxExecutorTool
+    App\Tool\SandboxExecutorTool:
+        arguments:
+            # Manuelle Definition der Abhängigkeiten, falls autowire deaktiviert ist
+            $kernel: '@kernel'
+            $logger: '@logger'
+        tags:
+            # WICHTIG: Manuelles Tagging für das AI-Bundle
+            - { name: 'symfony.ai.tool', alias: 'run_code_in_sandbox' }

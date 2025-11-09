@@ -1,919 +1,418 @@
-# Symfony Blog API - Produktionsreife Dokumentation
+# Projekt-Dokumentation
 
-Eine gehärtete, produktionsreife Blog-API mit erweiterten Security-Features, JWT-Authentifizierung, hierarchischen Kategorien und umfassender Dateiverwaltung.
+Diese README-Datei bietet eine detaillierte Dokumentation des Quellcodes dieses Symfony-Projekts. Sie beschreibt die Architektur, die Funktionalitäten der einzelnen Komponenten (Controller, Services, Entitäten, Tools, Listener) und wichtige Implementierungsdetails.
 
-**Version:** 2.0.0  
-**Status:** Production-Ready mit Security Hardening  
-**Lizenz:** MIT  
-**Security Level:** ⭐⭐⭐⭐⭐ (Hardened)
+## Inhaltsverzeichnis
 
----
-
-## 🔒 Security Features (NEU in v2.0)
-
-### ✅ Implementierte Sicherheitsmaßnahmen
-
-#### 1. **Input Validation & Sanitization**
-- **HTMLPurifier Integration**: Alle User-generierten Inhalte werden durch HTMLPurifier gefiltert
-- **XSS-Schutz**: Automatische Bereinigung von HTML-Tags in Posts und Kommentaren
-- **SQL Injection Prevention**: Doctrine ORM mit Prepared Statements
-- **Path Traversal Protection**: Validierung aller Dateipfade gegen Directory Traversal
-
-#### 2. **File Upload Security**
-```php
-// Implementierte Validierungen:
-- MIME-Type Whitelist (nur image/jpeg, image/png, image/gif, image/webp)
-- Doppelte MIME-Type-Prüfung (Client + Server mit finfo)
-- Dateigröße-Limit: 5MB
-- Bild-Dimensions-Check (100px - 10000px)
-- Dateiname-Sanitization (keine mehrfachen Extensions)
-- Polyglot-Attack-Prevention (.php.jpg blockiert)
-- Permissions-Setting: 0644 (nicht ausführbar)
-```
-
-#### 3. **Authentication & Session Security**
-- **HttpOnly Cookies**: JWT-Tokens sind nicht per JavaScript zugreifbar
-- **SameSite Cookies**: CSRF-Schutz durch `SameSite=lax` (Produktion: `strict`)
-- **Secure Cookies in Production**: Nur HTTPS-Übertragung
-- **Token-based Auth**: Refresh Tokens mit Single-Use-Policy
-- **Rate Limiting**: 
-  - Login: 5 Versuche / 15 Minuten
-  - Password Reset: 3 Versuche / 1 Stunde
-  - Token Refresh: 20 Versuche / 1 Stunde
-
-#### 4. **Password Security**
-- **Hashed Tokens**: Reset-Tokens werden als SHA-256 Hash gespeichert
-- **TTL-basierte Gültigkeit**: Tokens laufen nach 1 Stunde ab
-- **Sichere Passwortspeicherung**: Argon2id Hashing via Symfony
-- **Passwort-Requirements**: Mindestens 8 Zeichen
-
-#### 5. **HTTP Security Headers**
-```nginx
-# Automatisch gesetzte Header (SecurityHeadersListener)
-Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
-Content-Security-Policy: default-src 'none'; script-src 'self'; [...]
-X-Content-Type-Options: nosniff
-X-Frame-Options: DENY
-X-XSS-Protection: 1; mode=block
-Referrer-Policy: strict-origin-when-cross-origin
-Permissions-Policy: geolocation=(), microphone=(), camera=(), [...]
-```
-
-#### 6. **Error Handling & Information Disclosure Prevention**
-- **Production Mode**: Keine Stack Traces oder interne Fehlerdetails
-- **Generic Error Messages**: "Ein Fehler ist aufgetreten" statt Details
-- **Comprehensive Logging**: Alle Exceptions werden intern geloggt
-- **Audit Trail**: Security-Events werden mit IP, Timestamp und Context geloggt
-
-#### 7. **CORS & API Security**
-- **Origin Whitelist**: Nur vorkonfigurierte Domains erlaubt
-- **Credentials Required**: `withCredentials: true` erforderlich
-- **Preflight Caching**: 1 Stunde Cache für OPTIONS-Requests
+1.  [Projektübersicht](#1-projektübersicht)
+2.  [Architektur](#2-architektur)
+3.  [Verzeichnisse und Dateien](#3-verzeichnisse-und-dateien)
+    *   [src/Controller](#srccontroller)
+    *   [src/DataFixtures](#srcdatafixtures)
+    *   [src/DTO](#srcdto)
+    *   [src/Entity](#srcentity)
+    *   [src/EventListener](#srceventlistener)
+    *   [src/Kernel.php](#srckernelphp)
+    *   [src/Repository](#srcrepository)
+    *   [src/Security](#srcsecurity)
+    *   [src/Service](#srcservice)
+    *   [src/Tool](#srctool)
+    *   [config](#config)
+4.  [Wichtige Funktionalitäten](#4-wichtige-funktionalitäten)
+    *   [Authentifizierung & Autorisierung](#authentifizierung--autorisierung)
+    *   [Passwort-Management](#passwort-management)
+    *   [Sicherheits-Header](#sicherheits-header)
+    *   [Fehlerbehandlung](#fehlerbehandlung)
+    *   [AI-Agent Integration](#ai-agent-integration)
+    *   [Dateisicherheit](#dateisicherheit)
+    *   [Knowledge Base Indexierung](#knowledge-base-indexierung)
+    *   [Sandbox-Ausführung](#sandbox-ausführung)
+    *   [Code-Analyse-Tool](#code-analyse-tool)
+    *   [Deployment-Tool](#deployment-tool)
+5.  [Setup und Installation](#5-setup-und-installation)
+6.  [Tests](#6-tests)
+7.  [Nutzung der API (Swagger/OpenAPI)](#7-nutzung-der-api-swaggeropenapi)
 
 ---
 
-## 📋 Inhaltsverzeichnis
+## 1. Projektübersicht
 
-- [Features](#-features)
-- [Security Features](#-security-features)
-- [Technologien](#-technologien)
-- [Installation](#-installation)
-- [Konfiguration](#-konfiguration)
-- [API-Dokumentation](#-api-dokumentation)
-- [Security Best Practices](#-security-best-practices)
-- [Testing](#-testing)
-- [Deployment](#-deployment)
-- [Security Checklist](#-security-checklist)
+Dieses Projekt ist eine Symfony-Anwendung, die als Backend für eine API dient. Es beinhaltet Funktionalitäten zur Benutzerauthentifizierung, -registrierung und Passwortverwaltung. Darüber hinaus integriert es einen AI-Agenten für Dateigenerierung und bietet Tools für Code-Analyse, Sandbox-Ausführung und Deployment. Ein starker Fokus liegt auf Sicherheit und Wartbarkeit.
 
----
+## 2. Architektur
 
-## 🚀 Features
+Die Anwendung folgt dem Model-View-Controller (MVC)-Pattern, wie es typisch für Symfony ist, wobei der "View"-Teil hier primär über JSON-Responses für eine API bereitgestellt wird. Die Geschäftslogik ist in Services gekapselt, und die Datenbankinteraktion erfolgt über Doctrine-Entitäten und -Repositories.
 
-### Core Features
-- ✅ **JWT-Authentifizierung** mit HttpOnly Cookies
-- ✅ **Refresh Token System** mit automatischer Rotation
-- ✅ **Rate Limiting** für alle sensiblen Endpunkte
-- ✅ **Hierarchische Kategorien** mit Zirkelbezug-Prävention
-- ✅ **File Upload System** mit umfassender Validierung
-- ✅ **Password Reset Flow** mit gehashten Tokens
-- ✅ **CAPTCHA-System** für Bot-Prävention
-- ✅ **Audit Logging** für Security-Events
-- ✅ **Content Sanitization** mit HTMLPurifier
+Besondere Architekturaspekte:
+*   **API-zentriert:** Alle Interaktionen erfolgen über RESTful-API-Endpunkte, die mit OpenAPI-Annotationen dokumentiert sind.
+*   **Sicherheitsfokus:** Umfassende Sicherheitsmechanismen sind implementiert, darunter JWT-Authentifizierung, Refresh-Tokens, Rate Limiting, strikte Sicherheits-Header und sichere Dateiverwaltung.
+*   **AI-Agent Integration:** Das Projekt erweitert die Standard-Symfony-Funktionalität um AI-Agenten-Fähigkeiten, die es ermöglichen, dynamisch Code zu generieren, Dokumentation zu indizieren und Code in einer Sandbox auszuführen.
+*   **Modularität:** Services und Tools sind klar getrennt und folgen dem Single Responsibility Principle.
 
-### Security Features (Neu)
-- ✅ **XSS-Schutz** auf allen Eingaben
-- ✅ **CSRF-Schutz** via SameSite Cookies
-- ✅ **SQL Injection Prevention** durch ORM
-- ✅ **Path Traversal Protection**
-- ✅ **Polyglot Attack Prevention** bei Uploads
-- ✅ **Information Disclosure Prevention**
-- ✅ **Security Headers** automatisch gesetzt
-- ✅ **HTTPS Enforcement** in Production
+## 3. Verzeichnisse und Dateien
 
----
+Hier ist eine detaillierte Beschreibung der wichtigsten Verzeichnisse und Dateien im Projekt.
 
-## 🛠 Technologien
+### src/Controller
 
-### Core Stack
-- **PHP 8.2+** mit Type-Safety
-- **Symfony 7.3** - Stabiles Framework
-- **Doctrine ORM 3.0+** mit Prepared Statements
-- **MySQL 8.0+** / **MariaDB 10.4+**
+Enthält die Controller, die HTTP-Anfragen entgegennehmen, die Geschäftslogik an Services delegieren und HTTP-Antworten zurückgeben.
 
-### Security Libraries
-- **Lexik JWT Bundle 3.0** - JWT-Authentifizierung
-- **HTMLPurifier 4.19** - XSS-Protection
-- **Symfony Rate Limiter** - DDoS-Schutz
-- **Symfony Security Bundle** - Authorization
+*   `AuthController.php`
+    *   **Funktion:** Verwaltet alle Authentifizierungs- und Autorisierungs-bezogenen API-Endpunkte.
+    *   **Endpunkte:**
+        *   `/api/login` (POST): Authentifiziert einen Benutzer, setzt JWT Access- und Refresh-Token als Cookies. Inklusive Rate Limiting.
+        *   `/api/logout` (POST): Löscht Access- und Refresh-Token-Cookies.
+        *   `/api/register` (POST): Registriert einen neuen Benutzer.
+        *   `/api/password/request-reset` (POST): Fordert einen Passwort-Reset an und sendet eine E-Mail mit einem Token. Inklusive Rate Limiting.
+        *   `/api/password/reset` (POST): Setzt das Passwort mit einem gültigen Reset-Token zurück.
+        *   `/api/password/change` (POST): Ermöglicht einem angemeldeten Benutzer, sein eigenes Passwort zu ändern.
+    *   **Abhängigkeiten:** `AuthService`, `PasswordService`, `JWTTokenManagerInterface`, `UserRepository`, `UserPasswordHasherInterface`, `RefreshTokenManagerInterface`, `RefreshTokenGeneratorInterface`, `EntityManagerInterface`, `RateLimiterFactory`.
+    *   **Sicherheitsaspekte:** Implementiert Rate Limiting für Login- und Passwort-Reset-Vorgänge, verwendet sichere Token-Generierung und Hashing.
 
-### Testing
-- **PHPUnit 9.6+** - 90%+ Code Coverage
-- **Symfony Test Framework** - Funktionale Tests
+*   `FileGeneratorController.php`
+    *   **Funktion:** Stellt einen API-Endpunkt bereit, um den AI-Agenten zur Dateigenerierung aufzurufen und den Status des Agenten zu verfolgen.
+    *   **Endpunkte:**
+        *   `/api/generate-file` (POST): Nimmt einen Prompt entgegen und leitet ihn an den AI-Agenten weiter, um Dateien zu generieren. Gibt den Generierungsstatus und eventuell erstellte Dateien zurück.
+        *   `/api/index-knowledge` (POST): Löst die manuelle Indexierung der Knowledge Base aus.
+    *   **Abhängigkeiten:** `LoggerInterface`, `AgentStatusService`, `AgentInterface` (für `ai.agent.file_generator`), `KnowledgeIndexerTool`.
+    *   **Besonderheiten:** Nutzt `AgentStatusService` zur Echtzeit-Statusverfolgung des AI-Agenten. Behandelt die Ausgabe des Agenten und sucht nach neu erstellten Dateien im `generated_code`-Verzeichnis.
 
----
+*   `HealthCheckController.php`
+    *   **Funktion:** Bietet einen einfachen Gesundheitscheck-Endpunkt für die Anwendung.
+    *   **Endpunkte:**
+        *   `/health` (GET): Prüft die Datenbankverbindung und gibt den Systemstatus zurück (`healthy` oder `unhealthy`).
+    *   **Abhängigkeiten:** `Doctrine\DBAL\Connection`.
+    *   **Besonderheiten:** Ideal für Load Balancer und Monitoring-Systeme.
 
-## 📦 Installation
+### src/DataFixtures
 
-### Schritt 1: System-Voraussetzungen prüfen
+Enthält Klassen zum Laden von initialen Daten in die Datenbank.
+
+*   `AppFixtures.php`
+    *   **Funktion:** Lädt Beispieldaten (Benutzer, Kategorie, Post) in die Datenbank. Nützlich für Entwicklung und Tests.
+    *   **Abhängigkeiten:** `UserPasswordHasherInterface`, `ObjectManager`.
+    *   **Besonderheiten:** Erstellt einen Standardbenutzer (`test@example.com` / `password123`) und einen Beispielpost.
+
+### src/DTO
+
+Enthält Data Transfer Objects (DTOs), die zur Strukturierung von Eingabedaten für API-Anfragen verwendet werden.
+
+*   `AgentPromptRequest.php`
+    *   **Funktion:** DTO für Anfragen an den AI-Agenten, die einen `prompt` enthalten.
+    *   **Validierung:** `#[Assert\NotBlank]` stellt sicher, dass der Prompt nicht leer ist.
+
+*   `RegisterRequestDTO.php`
+    *   **Funktion:** DTO für die Registrierung neuer Benutzer.
+    *   **Properties:** `email`, `password`. `readonly` sorgt für Unveränderlichkeit nach der Initialisierung.
+
+### src/Entity
+
+Definiert die Doctrine ORM-Entitäten, die die Datenbanktabellen repräsentieren.
+
+*   `RefreshToken.php`
+    *   **Funktion:** Erweitert `Gesdinet\JWTRefreshTokenBundle\Entity\RefreshToken` zur Speicherung von Refresh-Tokens.
+    *   **Mapping:** `#[ORM\Entity]`, `#[ORM\Table(name: 'refresh_tokens')]`.
+
+*   `User.php`
+    *   **Funktion:** Repräsentiert die Benutzer-Entität. Implementiert `UserInterface` und `PasswordAuthenticatedUserInterface` für Symfony Security.
+    *   **Properties:** `id`, `email`, `roles`, `password`, `resetTokenHash`, `resetTokenExpiresAt`. `resetToken` (transient) wird für die E-Mail-Kommunikation verwendet.
+    *   **Methoden:** Enthält Methoden zum Abrufen und Setzen von Benutzerdaten, Rollen, Passwort-Hashing, sowie zur Verwaltung von Passwort-Reset-Tokens (`setResetTokenPlain`, `verifyResetToken`, `isResetTokenValid`, `clearResetToken`).
+    *   **Sicherheitsaspekte:** Speichert Passwort-Reset-Tokens nur als Hash und mit Ablaufdatum.
+
+### src/EventListener
+
+Enthält Event Listener, die auf bestimmte Symfony-Events reagieren, um globale Logik auszuführen.
+
+*   `ExceptionListener.php`
+    *   **Funktion:** Fängt alle unbehandelten Exceptions in der Anwendung ab.
+    *   **Verhalten:** Loggt detaillierte Fehlerinformationen (für interne Nutzung) und gibt eine benutzerfreundliche JSON-Fehlerantwort zurück. In der `prod`-Umgebung werden keine Details offengelegt, in `dev` werden sie zum Debugging bereitgestellt.
+    *   **Sicherheitsaspekte:** Verhindert Information Disclosure in der Produktion.
+
+*   `SecurityHeadersListener.php`
+    *   **Funktion:** Fügt wichtige Sicherheits-HTTP-Header zu allen Responses hinzu.
+    *   **Header:** `Strict-Transport-Security` (HSTS), `Content-Security-Policy` (CSP), `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`, `Permissions-Policy`.
+    *   **Besonderheiten:**
+        *   Erzwingt HTTPS-Redirect in `prod`-Umgebung.
+        *   Spezifische, weniger restriktive CSP für den `/api/doc` (Swagger UI) Endpunkt, ansonsten sehr strikt.
+        *   Entfernt identifizierende Server-Header (`Server`, `X-Powered-By`).
+    *   **Sicherheitsaspekte:** Hilft, eine Vielzahl von Web-Sicherheitslücken zu mindern (XSS, Clickjacking, MIME-Sniffing, etc.).
+
+### src/Kernel.php
+
+Der Kern der Symfony-Anwendung.
+
+*   `Kernel.php`
+    *   **Funktion:** Startpunkt der Symfony-Anwendung, nutzt `MicroKernelTrait`.
+
+### src/Repository
+
+Enthält Doctrine Repository-Klassen für den Zugriff auf Entitätsdaten.
+
+*   `UserRepository.php`
+    *   **Funktion:** Stellt Methoden für den Datenbankzugriff auf `User`-Entitäten bereit.
+    *   **Implementiert:** `PasswordUpgraderInterface` zum automatischen Re-Hashing von Passwörtern bei Bedarf.
+    *   **Methoden:** `upgradePassword`, sowie generische `find`, `findOneBy`, `findAll`, `findBy`.
+
+### src/Security
+
+Enthält Klassen, die für die Authentifizierung und Autorisierung zuständig sind.
+
+*   `AppCustomAuthenticator.php`
+    *   **Funktion:** Ein benutzerdefinierter Authenticator für den `/api/login` Endpunkt (klassische E-Mail/Passwort-Authentifizierung).
+    *   **Abhängigkeiten:** `JWTTokenManagerInterface`.
+    *   **Besonderheiten:** Erstellt bei erfolgreichem Login ein JWT.
+
+*   `JwtTokenAuthenticator.php`
+    *   **Funktion:** Ein Authenticator, der JWTs aus einem Cookie (`BEARER`) extrahiert und den Benutzer authentifiziert.
+    *   **Implementiert:** `AuthenticationEntryPointInterface`, um eine korrekte 401-Antwort zu liefern, wenn kein Token vorhanden ist.
+    *   **Abhängigkeiten:** `JWTTokenManagerInterface`, `UserProviderInterface`.
+    *   **Sicherheitsaspekte:** Überprüft die Gültigkeit des Tokens und behandelt Fehler bei ungültigen oder abgelaufenen Tokens.
+
+### src/Service
+
+Enthält die Geschäftslogik der Anwendung.
+
+*   `AgentStatusService.php`
+    *   **Funktion:** Ein einfacher Service zum Sammeln und Bereitstellen von Statusmeldungen, die während der Ausführung eines AI-Agenten generiert werden.
+    *   **Methoden:** `addStatus`, `getStatuses`, `clearStatuses`.
+    *   **Besonderheiten:** Nützlich, um dem Frontend Live-Updates über den Fortschritt eines langlaufenden AI-Vorgangs zu geben.
+
+*   `AuditLoggerService.php`
+    *   **Funktion:** Zentraler Service für das Audit-Logging von sicherheitsrelevanten Ereignissen.
+    *   **Abhängigkeiten:** `LoggerInterface`, `RequestStack`.
+    *   **Methoden:** `logSecurityEvent`, `logAuthAttempt`, `logUnauthorizedAccess`, `logSuspiciousActivity`.
+    *   **Sicherheitsaspekte:** Erfasst wichtige Kontextinformationen wie IP-Adresse, User-Agent, Methode, Pfad und Zeitstempel. Loggt auf dem `warning`-Level in einem dedizierten `security`-Kanal.
+
+*   `AuthService.php`
+    *   **Funktion:** Kapselt die Geschäftslogik für die Benutzerregistrierung.
+    *   **Abhängigkeiten:** `EntityManagerInterface`, `UserPasswordHasherInterface`.
+    *   **Methoden:** `register`.
+    *   **Sicherheitsaspekte:** Prüft auf existierende E-Mails, hashst Passwörter.
+
+*   `FileSecurityService.php`
+    *   **Funktion:** Stellt Funktionen zur sicheren Validierung, Speicherung und Löschung von hochgeladenen Dateien bereit.
+    *   **Konstanten:** `ALLOWED_MIMES`, `MAX_FILE_SIZE`, `MIN_IMAGE_DIMENSION`, `MAX_IMAGE_DIMENSION`.
+    *   **Methoden:**
+        *   `validateUploadedFile`: Führt umfangreiche Prüfungen durch (Größe, MIME-Type (Client- & Server-seitig), Bild-Header, Dimensionen, verdächtige Dateinamen).
+        *   `validateFilename`: Prüft auf Polyglot-Dateinamen und gefährliche Extensions.
+        *   `saveUploadedFile`: Speichert eine validierte Datei sicher mit einem eindeutigen, sluggifizierten Dateinamen.
+        *   `secureDelete`: Löscht eine Datei sicher, indem der Inhalt mit Zufallsdaten überschrieben wird, um Wiederherstellung zu erschweren, und verhindert Path Traversal.
+    *   **Sicherheitsaspekte:** Extrem wichtig für die Abwehr von Datei-Upload-Schwachstellen (z.B. Remote Code Execution, DoS durch große Dateien, Bild-Magick-Exploits).
+
+*   `PasswordService.php`
+    *   **Funktion:** Verwaltet die Logik für Passwort-Reset- und Passwort-Änderungsprozesse.
+    *   **Abhängigkeiten:** `UserRepository`, `EntityManagerInterface`, `UserPasswordHasherInterface`, `MailerInterface`.
+    *   **Methoden:**
+        *   `requestPasswordReset`: Generiert einen sicheren Token, speichert den Hash und das Ablaufdatum und sendet eine Reset-E-Mail. Verhindert Benutzer-Enumeration, indem immer eine "erfolgreich gesendet"-Meldung zurückgegeben wird, unabhängig davon, ob die E-Mail existiert.
+        *   `resetPassword`: Setzt das Passwort eines Benutzers mit einem gültigen Token zurück.
+        *   `changePassword`: Ermöglicht einem angemeldeten Benutzer, sein Passwort zu ändern.
+        *   `sendResetEmail`: Hilfsfunktion zum Versenden der Passwort-Reset-E-Mail.
+    *   **Sicherheitsaspekte:** Verwendet sichere, gehashte Reset-Tokens mit Ablaufdatum, prüft Token-Gültigkeit, implementiert Passwort-Komplexitätsregeln (Minimallänge).
+
+### src/Tool
+
+Enthält benutzerdefinierte Tools, die vom AI-Agenten verwendet werden können. Diese Tools sind Symfony Services, die mit dem `#[AsTool]`-Attribut annotiert sind.
+
+*   `AnalyzeCodeTool.php`
+    *   **Funktion:** Analysiert PHP-Dateien im Projekt und liefert Metriken wie Zeilenanzahl, Dateigröße und optional den Dateiinhalte (begrenzt).
+    *   **Abhängigkeiten:** `KernelInterface`, `Finder`.
+    *   **Methoden:** `__invoke`.
+    *   **Besonderheiten:** Ignoriert Standardverzeichnisse wie `vendor`, `node_modules`, `var`. Implementiert eine Heuristik, um binäre von Textdateien zu unterscheiden. Beschränkt die Größe der eingelesenen Dateien, um Speicherprobleme zu vermeiden.
+
+*   `CodeSaverTool.php`
+    *   **Funktion:** Speichert den bereitgestellten Code in einer Datei im `generated_code`-Verzeichnis.
+    *   **Abhängigkeiten:** `LoggerInterface`.
+    *   **Methoden:** `__invoke`.
+    *   **Sicherheitsaspekte:** Verhindert Path Traversal mit `basename()`. Schränkt erlaubte Dateiendungen ein. Stellt sicher, dass das Zielverzeichnis existiert.
+
+*   `DeployGeneratedCodeTool.php`
+    *   **Funktion:** Generiert ein Shell-Skript, um Dateien aus dem `generated_code`-Verzeichnis an bestimmte Zielorte im Projekt zu kopieren.
+    *   **Abhängigkeiten:** `KernelInterface`, `Filesystem`, `LoggerInterface`.
+    *   **Methoden:** `__invoke`.
+    *   **Sicherheitsaspekte:** **WICHTIG:** Das Skript muss vom Benutzer manuell überprüft und ausgeführt werden, um unbeabsichtigte oder bösartige Änderungen am Produktionscode zu verhindern. Implementiert Path Traversal Prevention für Quell- und Zielpfade.
+
+*   `KnowledgeIndexerTool.php`
+    *   **Funktion:** Indiziert RST- und Markdown-Dokumentationsdateien aus dem `knowledge_base`-Verzeichnis in einen Vektor-Store.
+    *   **Abhängigkeiten:** `PlatformInterface`, `StoreInterface`, `LoggerInterface`, `Finder`, `TextFileLoader`, `TextSplitTransformer`, `Vectorizer`.
+    *   **Methoden:** `__invoke`.
+    *   **Besonderheiten:** Nutzt `TextSplitTransformer` um Dokumente in kleinere Chunks aufzuteilen und `Vectorizer` von der AI Platform, um diese Chunks in Vektoren umzuwandeln. Verarbeitet in Batches, um API-Limits zu respektieren und Fehler zu vermeiden.
+
+*   `SandboxExecutorTool.php`
+    *   **Funktion:** Führt eine PHP-Datei aus dem `generated_code`-Verzeichnis in einer isolierten Docker-Sandbox aus.
+    *   **Abhängigkeiten:** `KernelInterface`, `Filesystem`, `LoggerInterface`, `Process`.
+    *   **Methoden:** `__invoke`.
+    *   **Sicherheitsaspekte:** Erstellt einen temporären Docker-Kontext, kopiert nur benötigte Dateien (composer.json, lock, die auszuführende Datei) und führt `composer install` sowie das PHP-Skript in einem Wegwerf-Container aus. Verhindert so, dass bösartiger Code das Host-System beeinträchtigt. Bereinigt temporäre Verzeichnisse.
+
+### config
+
+Enthält die Konfigurationsdateien der Symfony-Anwendung.
+
+*   `bundles.php`
+    *   **Funktion:** Registriert alle Bundles, die in der Anwendung verwendet werden.
+    *   **Besonderheiten:** Listet wichtige Bundles wie `LexikJWTAuthenticationBundle`, `GesdinetJWTRefreshTokenBundle`, `NelmioApiDocBundle` und `AiBundle` auf.
+
+*   `preload.php`
+    *   **Funktion:** Ermöglicht PHP OPcache Preloading, um die Anwendungsleistung in der Produktion zu verbessern.
+
+## 4. Wichtige Funktionalitäten
+
+### Authentifizierung & Autorisierung
+
+Das Projekt verwendet JWT (JSON Web Tokens) für die Authentifizierung.
+*   **Login:** Benutzer melden sich über `/api/login` an. Bei Erfolg erhalten sie ein Access Token (als `BEARER` Cookie) und ein Refresh Token (als `refresh_token` Cookie).
+*   **Access Token:** Kurzlebig (z.B. 1 Stunde), wird für jede geschützte Anfrage gesendet.
+*   **Refresh Token:** Langlebiger, wird verwendet, um ein neues Access Token zu erhalten, wenn das alte abgelaufen ist (durch das `gesdinet/jwt-refresh-token-bundle` gehandhabt).
+*   **Authenticator:** `JwtTokenAuthenticator` verarbeitet das `BEARER` Cookie.
+*   **Rate Limiting:** `/api/login` und `/api/password/request-reset` sind durch Rate Limiter geschützt, um Brute-Force-Angriffe zu erschweren.
+
+### Passwort-Management
+
+Der `PasswordService` bietet umfassende Funktionen:
+*   **Registrierung:** `AuthService::register` erstellt neue Benutzer mit gehashten Passwörtern.
+*   **Passwort-Reset:** `PasswordService::requestPasswordReset` sendet eine E-Mail mit einem einmaligen, zeitlich begrenzten Token. Der Token-Hash wird in der Datenbank gespeichert, um Angriffe zu erschweren. `PasswordService::resetPassword` ermöglicht das Setzen eines neuen Passworts mit diesem Token.
+*   **Passwort-Änderung:** Angemeldete Benutzer können ihr Passwort über `PasswordService::changePassword` ändern.
+*   **Sicherheit:** Passwörter werden immer gehasht gespeichert. Reset-Tokens sind nur für eine begrenzte Zeit gültig.
+
+### Sicherheits-Header
+
+Der `SecurityHeadersListener` ist entscheidend für die Absicherung der Anwendung gegen gängige Web-Angriffe:
+*   **HSTS (Strict-Transport-Security):** Erzwingt HTTPS für alle zukünftigen Anfragen (nur bei HTTPS-Verbindung).
+*   **CSP (Content-Security-Policy):** Definiert, welche Ressourcen von wo geladen werden dürfen, um XSS zu verhindern. Eine speziell angepasste CSP wird für die Swagger UI bereitgestellt.
+*   **X-Frame-Options: DENY:** Verhindert Clickjacking.
+*   **X-Content-Type-Options: nosniff:** Verhindert MIME-Sniffing.
+*   **X-XSS-Protection: 1; mode=block:** Aktiviert XSS-Filter im Browser.
+*   **Referrer-Policy: strict-origin-when-cross-origin:** Kontrolliert, welche Referrer-Informationen gesendet werden.
+*   **Permissions-Policy:** Deaktiviert unerwünschte Browser-APIs.
+*   **Header-Bereinigung:** Entfernt `Server` und `X-Powered-By` Header, um Fingerprinting zu erschweren.
+
+### Fehlerbehandlung
+
+Der `ExceptionListener` sorgt für eine robuste Fehlerbehandlung:
+*   Alle Exceptions werden zentral geloggt.
+*   In der `prod`-Umgebung erhalten Benutzer nur generische Fehlermeldungen, um Information Disclosure zu verhindern.
+*   In der `dev`-Umgebung werden detaillierte Fehlerinformationen für das Debugging bereitgestellt.
+
+### AI-Agent Integration
+
+Das Projekt integriert `symfony/ai` Bundles, um AI-Agenten für bestimmte Aufgaben zu nutzen:
+*   Der `FileGeneratorController` orchestriert die Kommunikation mit einem AI-Agenten, der auf "file_generator" getauft ist.
+*   `AgentStatusService` ermöglicht die Rückmeldung von Prozess-Status an das Frontend.
+*   Custom Tools (`AnalyzeCodeTool`, `CodeSaverTool`, `DeployGeneratedCodeTool`, `KnowledgeIndexerTool`, `SandboxExecutorTool`) erweitern die Fähigkeiten des AI-Agenten, ihm zu erlauben, Code zu analysieren, zu speichern, auszuführen und Wissen zu indexieren.
+
+### Dateisicherheit
+
+Der `FileSecurityService` ist eine kritische Komponente für jede Anwendung, die Dateiuploads erlaubt:
+*   **Whitelisting:** Nur explizit erlaubte MIME-Typen sind zulässig.
+*   **Größenbeschränkung:** Uploads sind auf 5MB begrenzt.
+*   **MIME-Type-Prüfung:** Client-seitige und Server-seitige (`finfo`) MIME-Type-Prüfung, um Manipulationen zu erkennen.
+*   **Bildvalidierung:** `getimagesize` wird verwendet, um die Integrität von Bilddateien zu prüfen und Dimensionen zu validieren.
+*   **Dateinamen-Validierung:** Verhindert Polyglot-Dateinamen (z.B. `.php.jpg`) und andere verdächtige Muster.
+*   **Sichere Speicherung:** Generiert eindeutige, sluggifizierte Dateinamen, um Kollisionen und Directory Traversal zu vermeiden.
+*   **Sicheres Löschen:** Überschreibt Dateiinhalte mit Zufallsdaten, um die Wiederherstellung zu erschweren, und prüft auf Path Traversal.
+
+### Knowledge Base Indexierung
+
+Das `KnowledgeIndexerTool` ermöglicht es dem AI-Agenten, die interne Dokumentation zu "lesen" und für seine Antworten zu nutzen:
+*   Scannt das `knowledge_base/`-Verzeichnis nach `.md` und `.rst` Dateien.
+*   Lädt die Dokumente und teilt sie in kleinere "Chunks" auf (`TextSplitTransformer`).
+*   Vektorisiert diese Chunks mithilfe der AI Platform (`Vectorizer`).
+*   Speichert die Vektor-Repräsentationen im konfigurierten Vektor-Store, sodass der AI-Agent relevante Informationen abrufen kann (Retrieval Augmented Generation - RAG).
+
+### Sandbox-Ausführung
+
+Das `SandboxExecutorTool` bietet eine sichere Umgebung zur Ausführung von generiertem PHP-Code:
+*   Erstellt einen temporären Docker-Container.
+*   Kopiert nur notwendige Projektteile (`composer.json`, `composer.lock`, die auszuführende PHP-Datei) in den Container.
+*   Führt `composer install` und dann das PHP-Skript in dieser isolierten Umgebung aus.
+*   Sorgt für die Bereinigung des temporären Verzeichnisses nach der Ausführung.
+*   **Sicherheitsaspekt:** Schützt das Host-System vor potenziell schädlichem oder fehlerhaftem generiertem Code.
+
+### Code-Analyse-Tool
+
+Das `AnalyzeCodeTool` hilft dem AI-Agenten, den bestehenden Code zu verstehen:
+*   Durchsucht `src/` und `config/` nach PHP-Dateien.
+*   Ermittelt Zeilenanzahl, Dateigröße und gibt optional den Inhalt (gekürzt) zurück.
+*   Ignoriert automatisch `vendor/`, `node_modules/` etc.
+
+### Deployment-Tool
+
+Das `DeployGeneratedCodeTool` unterstützt bei der Integration von generiertem Code:
+*   Generiert ein Bash-Skript, das Dateien aus `generated_code/` in die Zielverzeichnisse des Projekts kopiert.
+*   **Kritischer Hinweis:** Dieses Skript muss **immer** manuell vom Entwickler überprüft und ausgeführt werden, um sicherzustellen, dass nur beabsichtigte Änderungen vorgenommen werden.
+
+## 5. Setup und Installation
+
+Dieses Kapitel beschreibt die Schritte zur Einrichtung und Installation des Projekts.
+
+### Voraussetzungen
+
+*   PHP 8.2 oder höher
+*   Composer
+*   Docker (für Sandbox-Ausführung und Tests)
+*   Symfony CLI (optional, aber empfohlen)
+
+### Schritte
+
+1.  **Repository klonen:**
+    ```bash
+    git clone [URL_DEINES_REPOS]
+    cd [DEIN_PROJEKTVERZEICHNIS]
+    ```
+
+2.  **Composer-Abhängigkeiten installieren:**
+    ```bash
+    composer install
+    ```
+
+3.  **Umgebungsvariablen konfigurieren:**
+    Kopiere `.env` nach `.env.local` und passe die Werte an. Insbesondere Datenbank-Zugangsdaten und Mailer-Konfiguration.
+    ```bash
+    cp .env .env.local
+    ```
+
+4.  **Datenbank einrichten:**
+    ```bash
+    php bin/console doctrine:database:create
+    php bin/console doctrine:migrations:migrate
+    php bin/console doctrine:fixtures:load
+    ```
+
+5.  **JWT-Schlüssel generieren:**
+    ```bash
+    php bin/console lexik:jwt:generate-keypair
+    ```
+
+6.  **Knowledge Base indizieren (für AI-Agent):**
+    Wenn Sie die AI-Agenten-Funktionalität nutzen möchten, indizieren Sie die Knowledge Base:
+    ```bash
+    # Dies ist ein Symfony-Command, der den KnowledgeIndexerTool aufruft
+    php bin/console app:ai:index-knowledge
+    ```
+    Alternativ kann der `/api/index-knowledge` Endpunkt genutzt werden.
+
+7.  **Webserver starten (Symfony CLI):**
+    ```bash
+    symfony serve
+    ```
+    Die Anwendung ist nun unter `https://127.0.0.1:8000` (oder ähnlich) erreichbar.
+
+## 6. Tests
+
+Das Projekt sollte mit PHPUnit getestet werden.
+
+### PHPUnit ausführen
 
 ```bash
-# PHP-Version prüfen
-php -v  # Muss >= 8.2 sein
-
-# Benötigte Extensions
-php -m | grep -E 'pdo_mysql|gd|intl|mbstring|xml|curl'
-
-# Composer installieren (falls nicht vorhanden)
-curl -sS https://getcomposer.org/installer | php
-mv composer.phar /usr/local/bin/composer
-```
-
-### Schritt 2: Repository klonen
-
-```bash
-git clone https://github.com/Jens-Smit/BlogAPI.git
-cd BlogAPI
-```
-
-### Schritt 3: Dependencies installieren
-
-```bash
-# Development
-composer install
-
-# Production (ohne Dev-Dependencies)
-composer install --no-dev --optimize-autoloader
-```
-
-### Schritt 4: Umgebungsvariablen konfigurieren
-
-```bash
-cp .env .env.local
-nano .env.local
-```
-
-**Kritische Variablen für Production:**
-
-```bash
-# WICHTIG: In Production ändern!
-APP_ENV=prod
-APP_DEBUG=0
-APP_SECRET=<generiere-mit-openssl-rand-hex-32>
-
-# HTTPS & Cookies
-HTTPS_ONLY=true
-SECURE_COOKIES=true
-
-# Database (mit starkem Passwort)
-DATABASE_URL="mysql://user:STRONG_PASSWORD@db-host:3306/blog_prod"
-
-# JWT (mit starkem Passphrase)
-JWT_SECRET_KEY=%kernel.project_dir%/config/jwt/private.pem
-JWT_PUBLIC_KEY=%kernel.project_dir%/config/jwt/public.pem
-JWT_PASSPHRASE=<generiere-mit-openssl-rand-hex-32>
-
-# CORS (nur vertrauenswürdige Domains)
-CORS_ALLOW_ORIGIN=https://yourdomain.com
-FRONTEND_URL=https://yourdomain.com
-API_URL=https://api.yourdomain.com
-
-# Mailer (mit Credentials)
-MAILER_DSN=smtp://username:password@smtp.sendgrid.net:587
-CONTACT_FROM_EMAIL=noreply@yourdomain.com
-CONTACT_TO_EMAIL=support@yourdomain.com
-```
-
-### Schritt 5: Datenbank einrichten
-
-```bash
-# Datenbank erstellen
-php bin/console doctrine:database:create
-
-# Migrationen ausführen
-php bin/console doctrine:migrations:migrate --no-interaction
-
-# NIEMALS Fixtures in Production laden!
-# php bin/console doctrine:fixtures:load  # NUR in Development
-```
-
-### Schritt 6: JWT-Schlüssel generieren (SICHER!)
-
-```bash
-# Mit starkem Passphrase
-php bin/console lexik:jwt:generate-keypair
-
-# Permissions setzen (WICHTIG!)
-chmod 600 config/jwt/private.pem
-chmod 644 config/jwt/public.pem
-chown www-data:www-data config/jwt/private.pem config/jwt/public.pem
-```
-
-### Schritt 7: Upload-Verzeichnis sichern
-
-```bash
-# Verzeichnis erstellen
-mkdir -p public/uploads
-
-# KRITISCHE Permissions (nicht ausführbar!)
-chmod 755 public/uploads
-chown www-data:www-data public/uploads
-
-# .htaccess für zusätzlichen Schutz
-cat > public/uploads/.htaccess << 'EOF'
-<FilesMatch "\.(php|phtml|php3|php4|php5|phps)$">
-    Require all denied
-</FilesMatch>
-EOF
-```
-
----
-
-## ⚙️ Konfiguration
-
-### Security-kritische Konfigurationen
-
-#### 1. Security Headers (config/packages/security.yaml)
-
-```yaml
-security:
-    password_hashers:
-        Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface: 'auto'  # Argon2id
-    
-    firewalls:
-        api:
-            pattern: ^/api
-            stateless: true
-            custom_authenticators:
-                - App\Security\JwtTokenAuthenticator
-    
-    access_control:
-        # Öffentlich
-        - { path: ^/api/login, roles: PUBLIC_ACCESS }
-        - { path: ^/api/register, roles: PUBLIC_ACCESS }
-        - { path: ^/api/posts$, roles: PUBLIC_ACCESS, methods: [GET] }
-        
-        # Geschützt
-        - { path: ^/api/posts, roles: IS_AUTHENTICATED_FULLY, methods: [POST, PUT, DELETE] }
-        - { path: ^/api, roles: IS_AUTHENTICATED_FULLY }
-```
-
-#### 2. Rate Limiter Konfiguration
-
-```yaml
-# config/packages/rate_limiter.yaml
-framework:
-    rate_limiter:
-        login_limiter:
-            policy: 'sliding_window'
-            limit: 5
-            interval: '15 minutes'
-            lock_factory: 'lock.default.factory'
-            
-        password_reset_limiter:
-            policy: 'sliding_window'
-            limit: 3
-            interval: '1 hour'
-```
-
-#### 3. CORS-Konfiguration (Restriktiv!)
-
-```yaml
-# config/packages/nelmio_cors.yaml
-nelmio_cors:
-    defaults:
-        origin_regex: true
-        allow_origin: ['%env(CORS_ALLOW_ORIGIN)%']  # NUR vertrauenswürdige Domains!
-        allow_credentials: true
-        allow_methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
-        allow_headers: ['Content-Type', 'Authorization']
-        max_age: 3600
-```
-
----
-
-## 📚 API-Dokumentation
-
-### Interaktive Dokumentation
-
-```
-Production: https://api.yourdomain.com/api/doc
-Development: http://localhost:8000/api/doc
-JSON Schema: http://localhost:8000/api/doc.json
-```
-
-### Authentication Flow (SECURE)
-
-#### 1. Registrierung (mit Validierung)
-
-```bash
-POST /api/register
-Content-Type: application/json
-
-{
-  "email": "user@example.com",
-  "password": "SecurePass123!"  # Min. 8 Zeichen
-}
-
-Response (201 Created):
-{
-  "message": "Benutzer erfolgreich registriert."
-}
-```
-
-#### 2. Login (mit Rate Limiting)
-
-```bash
-POST /api/login
-Content-Type: application/json
-
-{
-  "email": "user@example.com",
-  "password": "SecurePass123!"
-}
-
-Response (200 OK):
-{
-  "message": "Login erfolgreich.",
-  "user": {
-    "email": "user@example.com"
-  }
-}
-
-# HttpOnly Cookies werden automatisch gesetzt:
-Set-Cookie: BEARER=<jwt-token>; HttpOnly; Secure; SameSite=Strict; Path=/
-Set-Cookie: refresh_token=<refresh-token>; HttpOnly; Secure; SameSite=Strict; Path=/
-```
-
-⚠️ **WICHTIG**: Frontend muss `credentials: 'include'` verwenden:
-
-```javascript
-fetch('https://api.yourdomain.com/api/login', {
-  method: 'POST',
-  credentials: 'include',  // ✅ ERFORDERLICH für HttpOnly Cookies
-  headers: {
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({ email, password })
-});
-```
-
-#### 3. Token Refresh (Automatisch)
-
-```bash
-POST /api/token/refresh
-Cookie: refresh_token=...
-
-Response (200 OK):
-{
-  "token": "new_jwt_token",
-  "refresh_token_expiration": 1234567890
-}
-
-# Neue Cookies werden gesetzt
-```
-
-#### 4. Logout (Token-Invalidierung)
-
-```bash
-POST /api/logout
-Cookie: BEARER=...; refresh_token=...
-
-Response (200 OK):
-{
-  "message": "Logout erfolgreich."
-}
-
-# Cookies werden gelöscht (Max-Age=0)
-```
-
-### File Upload (Secure)
-
-#### Sicherer Upload-Request
-
-```bash
-POST /api/posts
-Content-Type: multipart/form-data
-Authorization: Bearer <token>
-
-Form-Data:
-- title: "Mein Post"
-- content: "Text mit [img1] Platzhalter"
-- categoryId: 1
-- titleImage: <file>  # ✅ Nur: JPG, PNG, GIF, WEBP
-- images: [<file1>, <file2>]
-- imageMap: {"img1": "image1.jpg"}
-
-Response (201 Created):
-{
-  "message": "Post erfolgreich erstellt",
-  "id": 42
-}
-```
-
-**Validierungen:**
-- ✅ MIME-Type Whitelist
-- ✅ Maximale Dateigröße: 5MB
-- ✅ Bild-Dimensionen: 100px - 10000px
-- ✅ Keine doppelten Extensions (.php.jpg blockiert)
-- ✅ Dateiname wird sanitized
-
----
-
-## 🔒 Security Best Practices
-
-### 1. Production Deployment Checklist
-
-#### Environment Variables
-```bash
-# ⚠️ KRITISCH: Diese Werte MÜSSEN geändert werden!
-✅ APP_ENV=prod
-✅ APP_DEBUG=0
-✅ APP_SECRET=<32-byte-random-hex>
-✅ JWT_PASSPHRASE=<32-byte-random-hex>
-✅ SECURE_COOKIES=true
-✅ HTTPS_ONLY=true
-✅ DATABASE_URL mit starkem Passwort
-✅ CORS_ALLOW_ORIGIN nur für vertrauenswürdige Domains
-```
-
-#### Secrets generieren
-
-```bash
-# APP_SECRET
-openssl rand -hex 32
-
-# JWT_PASSPHRASE
-openssl rand -hex 32
-
-# Starkes DB-Passwort
-openssl rand -base64 32
-```
-
-### 2. File Permissions (UNIX)
-
-```bash
-# Application Files
-find . -type f -exec chmod 644 {} \;
-find . -type d -exec chmod 755 {} \;
-
-# Executable Scripts
-chmod +x bin/console bin/phpunit
-
-# JWT Keys (SEHR WICHTIG!)
-chmod 600 config/jwt/private.pem
-chmod 644 config/jwt/public.pem
-
-# Upload Directory (nicht ausführbar)
-chmod 755 public/uploads
-find public/uploads -type f -exec chmod 644 {} \;
-
-# Owner setzen
-chown -R www-data:www-data var/ public/uploads/
-```
-
-### 3. Database Security
-
-```sql
--- Separater DB-Benutzer (nicht root!)
-CREATE USER 'blog_user'@'localhost' IDENTIFIED BY 'STRONG_PASSWORD_HERE';
-GRANT SELECT, INSERT, UPDATE, DELETE ON blog_prod.* TO 'blog_user'@'localhost';
-FLUSH PRIVILEGES;
-
--- KEINE Administrator-Rechte vergeben!
-```
-
-### 4. SSL/TLS Configuration (Nginx)
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name api.yourdomain.com;
-    
-    # SSL Certificate (Let's Encrypt empfohlen)
-    ssl_certificate /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.yourdomain.com/privkey.pem;
-    
-    # Moderne SSL-Konfiguration
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256';
-    ssl_prefer_server_ciphers on;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
-    
-    # HSTS
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
-    
-    # Weitere Security Headers (werden auch von Symfony gesetzt)
-    add_header X-Frame-Options "DENY" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    
-    # Upload-Verzeichnis absichern
-    location ~ ^/uploads/.*\.php$ {
-        deny all;
-        return 403;
-    }
-    
-    # Symfony Routing
-    location / {
-        try_files $uri /index.php$is_args$args;
-    }
-    
-    location ~ ^/index\.php(/|$) {
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
-        fastcgi_split_path_info ^(.+\.php)(/.*)$;
-        include fastcgi_params;
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
-        fastcgi_param DOCUMENT_ROOT $realpath_root;
-        internal;
-    }
-}
-```
-
-### 5. Monitoring & Logging
-
-```yaml
-# config/packages/monolog.yaml (Production)
-when@prod:
-    monolog:
-        handlers:
-            main:
-                type: fingers_crossed
-                action_level: error
-                handler: nested
-            nested:
-                type: stream
-                path: "php://stderr"
-                level: debug
-                formatter: monolog.formatter.json
-            security:
-                type: stream
-                path: "%kernel.logs_dir%/security.log"
-                level: warning
-                channels: ["security"]
-```
-
-**Überwachung einrichten:**
-```bash
-# Logwatch installieren
-apt-get install logwatch
-
-# Täglich Security-Logs prüfen
-logwatch --service symfony --range today --detail high
-```
-
-### 6. Backup Strategy
-
-```bash
-# Automatisches Backup-Script
-#!/bin/bash
-DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR=/backups/blog-api
-
-# Database Backup
-mysqldump -u blog_user -p blog_prod | gzip > $BACKUP_DIR/db_$DATE.sql.gz
-
-# Files Backup
-tar -czf $BACKUP_DIR/uploads_$DATE.tar.gz public/uploads/
-
-# JWT Keys Backup (verschlüsselt!)
-tar -czf - config/jwt/ | openssl enc -aes-256-cbc -salt -out $BACKUP_DIR/jwt_$DATE.tar.gz.enc
-
-# Alte Backups löschen (älter als 30 Tage)
-find $BACKUP_DIR -type f -mtime +30 -delete
-```
-
----
-
-## 🧪 Testing
-
-### Test-Setup
-
-```bash
-# Test-Umgebung vorbereiten
-cp .env.test .env.test.local
-
-# Test-Datenbank
-php bin/console doctrine:database:create --env=test
-php bin/console doctrine:migrations:migrate --env=test --no-interaction
-
-# Tests ausführen
 php bin/phpunit
-
-# Mit Coverage
-php bin/phpunit --coverage-html coverage/
-
-# Spezifische Tests
-php bin/phpunit tests/Controller/AuthControllerTest.php
-php bin/phpunit --filter testLoginSuccess
 ```
 
-### Test Coverage Ziele
+Es wird erwartet, dass jede generierte Produktivcode-Datei eine entsprechende Testdatei im `tests/` Verzeichnis hat, die eine Code-Abdeckung von mindestens 70% erreicht. Mocks und Stubs sollten verwendet werden, um Abhängigkeiten zu isolieren.
 
-- ✅ **Unit Tests**: >80% Coverage
-- ✅ **Integration Tests**: Alle API-Endpoints
-- ✅ **Security Tests**: Authentication, Authorization, Input Validation
-- ✅ **Functional Tests**: Complete User Flows
+## 7. Nutzung der API (Swagger/OpenAPI)
 
----
+Die API ist vollständig mit OpenAPI-Annotationen dokumentiert und kann über die Swagger UI erkundet werden.
 
-## 🚀 Deployment
+*   **Swagger UI aufrufen:**
+    Navigieren Sie im Browser zu `/api/doc` (z.B. `https://127.0.0.1:8000/api/doc`).
 
-### Pre-Deployment Security Checklist
-
-```bash
-# 1. Environment Check
-✅ APP_ENV=prod
-✅ APP_DEBUG=0
-✅ HTTPS_ONLY=true
-✅ SECURE_COOKIES=true
-
-# 2. Secrets rotiert
-✅ APP_SECRET geändert
-✅ JWT_PASSPHRASE geändert
-✅ DB-Passwort geändert
-
-# 3. Dependencies aktualisiert
-composer install --no-dev --optimize-autoloader
-composer audit  # ✅ Keine Vulnerabilities
-
-# 4. Tests grün
-php bin/phpunit
-✅ Alle Tests bestanden
-
-# 5. File Permissions
-✅ JWT Keys: 600/644
-✅ Upload Dir: 755
-✅ Files: 644
-
-# 6. Database
-✅ Migrations angewendet
-✅ Backups konfiguriert
-✅ Separater DB-User
-
-# 7. SSL/TLS
-✅ Certificate valid
-✅ HTTPS Redirect aktiv
-✅ HSTS Header gesetzt
-
-# 8. Monitoring
-✅ Error Logging aktiv
-✅ Security Logging aktiv
-✅ Alerting konfiguriert
-```
-
-### Deployment Workflow
-
-```bash
-# 1. Code auf Server deployen
-git pull origin master
-
-# 2. Dependencies installieren
-composer install --no-dev --optimize-autoloader
-
-# 3. Cache clearen
-php bin/console cache:clear --env=prod
-php bin/console cache:warmup --env=prod
-
-# 4. Migrationen (mit Backup!)
-php bin/console doctrine:migrations:migrate --no-interaction
-
-# 5. Permissions setzen
-chmod 600 config/jwt/private.pem
-chmod 755 public/uploads
-
-# 6. PHP-FPM neu starten
-systemctl restart php8.2-fpm
-
-# 7. Health Check
-curl -I https://api.yourdomain.com/health
-# ✅ Sollte 200 OK zurückgeben
-```
-
----
-
-## ✅ Security Checklist
-
-### Vor jedem Production-Deployment
-
-- [ ] **Environment Variables**
-  - [ ] APP_ENV=prod
-  - [ ] APP_DEBUG=0
-  - [ ] Secrets rotiert (APP_SECRET, JWT_PASSPHRASE)
-  - [ ] HTTPS_ONLY=true
-  - [ ] SECURE_COOKIES=true
-  
-- [ ] **Dependencies**
-  - [ ] `composer audit` ohne Vulnerabilities
-  - [ ] Alle Packages aktuell
-  
-- [ ] **File Permissions**
-  - [ ] JWT Private Key: 600
-  - [ ] Upload Directory: 755
-  - [ ] Keine PHP-Dateien in /uploads ausführbar
-  
-- [ ] **Database**
-  - [ ] Separater DB-User (nicht root)
-  - [ ] Starkes Passwort
-  - [ ] Backups konfiguriert
-  
-- [ ] **SSL/TLS**
-  - [ ] Gültiges Certificate
-  - [ ] HTTPS Redirect aktiv
-  - [ ] HSTS Header gesetzt
-  
-- [ ] **Security Headers**
-  - [ ] Content-Security-Policy
-  - [ ] X-Frame-Options: DENY
-  - [ ] X-Content-Type-Options: nosniff
-  
-- [ ] **Logging & Monitoring**
-  - [ ] Error Logging aktiv
-  - [ ] Security Event Logging
-  - [ ] Alerting konfiguriert
-  
-- [ ] **Testing**
-  - [ ] Alle Tests grün
-  - [ ] Security Tests bestanden
-  
-- [ ] **Backups**
-  - [ ] Automatische DB-Backups
-  - [ ] JWT-Key-Backups verschlüsselt
-  - [ ] Upload-Backups
-
----
-
-## 🐛 Troubleshooting
-
-### Security-spezifische Issues
-
-#### 1. "CORS Error" trotz Konfiguration
-
-```bash
-# Problem: Origin nicht in Whitelist
-
-# Lösung 1: .env.local prüfen
-CORS_ALLOW_ORIGIN=https://exact-domain.com  # KEINE Wildcards!
-
-# Lösung 2: Preflight-Request prüfen
-curl -X OPTIONS https://api.yourdomain.com/api/posts \
-  -H "Origin: https://yourdomain.com" \
-  -H "Access-Control-Request-Method: POST" \
-  -v
-
-# Lösung 3: Cache clearen
-php bin/console cache:clear
-```
-
-#### 2. "JWT Token nicht gefunden" im Production
-
-```bash
-# Problem: HttpOnly Cookie wird nicht gesendet
-
-# Lösung 1: Frontend muss credentials senden
-fetch(url, {
-  credentials: 'include'  // ✅ WICHTIG!
-});
-
-# Lösung 2: SameSite-Cookie-Settings prüfen
-# Development: SameSite=Lax, Secure=false
-# Production: SameSite=Strict, Secure=true
-
-# Lösung 3: Domain-Matching prüfen
-# API: api.domain.com
-# Frontend: app.domain.com
-# ✅ SameSite=Lax erlaubt Cross-Subdomain
-```
-
-#### 3. "Rate Limit Exceeded"
-
-```bash
-# Problem: Zu viele Requests
-
-# Lösung 1: IP-basierte Limits prüfen
-# Logs prüfen: var/log/dev.log
-grep "Rate limit" var/log/prod.log
-
-# Lösung 2: Cache clearen (nur Development)
-php bin/console cache:pool:clear cache.rate_limiter
-
-# Lösung 3: Limits in config/packages/rate_limiter.yaml anpassen
-# ACHTUNG: Nicht zu hoch setzen (Security Risk!)
-```
-
-#### 4. "File Upload Failed" mit Error 500
-
-```bash
-# Problem: Validierung fehlgeschlagen
-
-# Lösung 1: Permissions prüfen
-ls -la public/uploads/
-# Sollte: drwxr-xr-x www-data www-data
-
-# Lösung 2: MIME-Type prüfen
-file --mime-type image.jpg
-# Muss in Whitelist sein: image/jpeg, image/png, image/gif, image/webp
-
-# Lösung 3: Dateigröße prüfen
-ls -lh image.jpg
-# Max: 5MB
-
-# Lösung 4: Logs prüfen
-tail -f var/log/prod.log
-```
-
----
-
-## 📞 Support & Security Issues
-
-### Security Vulnerabilities melden
-
-⚠️ **NIEMALS** Security-Issues öffentlich auf GitHub posten!
-
-**Verantwortungsvolle Offenlegung:**
-1. E-Mail an: security@jenssmit.de
-2. Beschreibung der Vulnerability
-3. Proof-of-Concept (falls möglich)
-4. Erwartete Antwort: 48 Stunden
-5. Fix-Timeline: 7-14 Tage (je nach Schweregrad)
-
-### Reguläre Support-Anfragen
-
-- **Issues:** [GitHub Issues](https://github.com/Jens-Smit/BlogAPI/issues)
-- **Email:** info@jenssmit.com
-- **Documentation:** [API Docs](https://jenssmit.de/api/doc)
-
----
-
-## 📝 Changelog
-
-### Version 2.0.0 (Security Hardening) - 2024-01-15
-
-**🔒 Security Updates:**
-- ✅ HTMLPurifier Integration für XSS-Schutz
-- ✅ File Upload Security (MIME-Type Validation, Polyglot Prevention)
-- ✅ Path Traversal Protection
-- ✅ Security Headers automatisch gesetzt
-- ✅ Password Reset mit gehashten Tokens
-- ✅ Rate Limiting für alle kritischen Endpoints
-- ✅ Audit Logging für Security-Events
-- ✅ Information Disclosure Prevention
-
-**🆕 Neue Features:**
-- CAPTCHA-System für Bot-Prävention
-- Health-Check Endpoint
-- Umfassende Test-Coverage (90%+)
-
-**🐛 Bug Fixes:**
-- Cookie-Handling in Tests korrigiert
-- Circular Reference Detection in Categories
-- MIME-Type-Validierung verbessert
-
----
-
-## 📄 Lizenz
-
-Dieses Projekt ist unter der MIT-Lizenz lizenziert.
-
-**WICHTIG für Production-Nutzung:**
-- Du bist selbst verantwortlich für Security-Updates
-- Regelmäßige Dependency-Updates erforderlich
-- Backup-Strategie implementieren
-- Monitoring & Alerting einrichten
-
----
-
-**Zuletzt aktualisiert:** 2024-01-15  
-**Entwickler:** [Jens Smit](https://jenssmit.de)  
-**Security Review:** 2024-01-15  
-**Nächstes Security Audit:** 2024-04-15
-
----
-
-## 🔗 Weitere Ressourcen
-
-- [OWASP Top 10](https://owasp.org/www-project-top-ten/)
-- [Symfony Security Best Practices](https://symfony.com/doc/current/security.html)
-- [PHP Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/PHP_Configuration_Cheat_Sheet.html)
-- [JWT Security Best Practices](https://tools.ietf.org/html/rfc8725)
-- [Content Security Policy Guide](https://content-security-policy.com/)
+Hier können Sie alle verfügbaren Endpunkte, deren Parameter und erwartete Responses einsehen und direkt testen.

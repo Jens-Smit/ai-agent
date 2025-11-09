@@ -53,8 +53,7 @@ security:
         - { path: ^/api/password/reset$, roles: PUBLIC_ACCESS }
         
         # AI Datei-Generierung (öffentlich zugänglich)
-        - { path: ^/api/generate-file, roles: PUBLIC_ACCESS }
-        - { path: ^/api/test-file-write, roles: PUBLIC_ACCESS }
+        - { path: ^/api/agent, roles: PUBLIC_ACCESS }
         - { path: ^/api/index-knowledge, roles: PUBLIC_ACCESS }
         
        
