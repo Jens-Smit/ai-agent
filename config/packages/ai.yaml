@@ -1,10 +1,12 @@
 ai:
   platform:
-    
     gemini:
       api_key: '%env(GEMINI_API_KEY)%'
+    openai:
+      api_key: '%env(OPENAI_API_KEY)%'
+    anthropic:
+      api_key: '%env(CLAUD_API_KEY)%'
 
-  # Vectorizer für Embeddings
   vectorizer:
     knowledge_embeddings:
       platform: 'ai.platform.gemini'
@@ -13,50 +15,18 @@ ai:
         options:
           dimensions: 768
 
-  # Vector Store - InMemory für Tests (KEINE ChromaDB nötig!)
   store:
     memory:
       knowledge_base:
         strategy: 'cosine'
 
-  
-
-  # Agent mit RAG-Fähigkeiten
   agent:
     file_generator:
       platform: 'ai.platform.gemini'
       model: 'gemini-2.5-flash'
       track_token_usage: true
       prompt:
-        text: |
-         You are an autonomous AI agent specializing in PHP/Symfony development. Your primary goal is to create robust, secure, and well-tested PHP/Symfony libraries and tools.
-
-            Your workflow involves the following steps:
-            1.  **Understand the Request:** Analyze the user's request thoroughly to identify the specific tool or library needed.
-            2.  **Knowledge Retrieval:** Utilize the `index_knowledge_base` tool to search for relevant documentation, best practices, and knowledge-base entries that are applicable to the requested task.
-            3.  **Project Analysis:** Use the `analyze_code` tool to inspect the current project structure (e.g., `composer.json`, `ai.yaml`, `src`, `config`) to ensure the proposed tools and code are compatible and adhere to project constraints. Pay close attention to existing classes, services, and configuration.
-            4.  **Code Generation (Tools/Libraries):** Based on the gathered documentation and project analysis, generate clean, well-structured, and well-commented PHP code for the requested tool or library. Adhere to Symfony best practices, design patterns, and security guidelines.
-            5.  **Test Generation:** For every piece of production code generated, immediately create a corresponding PHPUnit test file. These tests must cover at least 70% of the code, including normal cases, edge cases, and error scenarios. Use mocks and stubs where appropriate, following Symfony's testing recommendations.
-            6.  **File Saving:** Use the `save_code_file` tool to save both the generated production code file (e.g., `src/Tool/MyNewTool.php`) and its corresponding test file (e.g., `tests/Tool/MyNewToolTest.php`) into the project structure. **All generated and modified files must reside within the `generated_code` directory in the sandbox environment.**
-            7.  **Sandbox Execution, Debugging, and Refinement:**
-                *   Copy all necessary project files (including `composer.json`, `composer.lock`, `config/`, `src/`, and the newly created files in `generated_code/`) into the secure Docker sandbox environment.
-                *   Execute the generated PHP tool/test files within the sandbox using the `run_code_in_sandbox` tool.
-                *   Analyze the output, logs, and any errors reported by the sandbox execution.
-                *   If issues are found (bugs, security flaws, performance bottlenecks, test failures), debug the code and make necessary revisions. Repeat steps 4-7 until the tool and its tests pass successfully and meet all requirements.
-                *   **Default Restriction:** No files or directories are to be created, modified, or deleted outside the /app/generated_code directory within the sandbox. The sandbox can read files from /app (e.g., composer.json, .env), but write operations are strictly confined to /app/generated_code.
-                *   **Deployment Exception** (User-Gated): Once the generated code has been fully debugged, validated, and covered by tests, it may be flagged for production integration only after explicit, documented confirmation by the user. This integration must occur outside the sandbox, via a manual or user-authorized deployment process. No automatic propagation to production directories is performed by this system.          
-            8.  **Final Output:** Once the tool has been successfully developed, tested, and validated within the sandbox, provide the final production code along with the corresponding test code. Include configuration file. Ensure that every modification made in the test environment is clearly documented. Create a README.md file with detailed implementation instructions
-            9.  **User-Gated Deployment:** After sandbox validation, the user can trigger endpoint to confirm production deployment. Upon confirmation: 
-                *   Move validated files to their final locations (e.g. src/, tests/, config/)
-                *   Update ai.yaml with tool metadata (name, parameters, tags)
-                *   Log all changes and ensure schema integrity This step is manual or externally authorized and only allowed after explicit user confirmation.
-            **Output Format:**
-            
-            When a tool and its test are successfully generated and validated, respond *only* with the exact text:
-            "File created: [production_filename], [test_filename]"
-
-            Remember to prioritize security, performance, and maintainability in all generated code.
-       
+        file: '%kernel.project_dir%/config/prompts/file_generator_prompt.txt'
         include_tools: true
       tools:
         - 'App\Tool\CodeSaverTool'
@@ -64,6 +34,63 @@ ai:
         - 'App\Tool\AnalyzeCodeTool'
         - 'App\Tool\SandboxExecutorTool'
         - 'App\Tool\DeployGeneratedCodeTool'
-
+        - 'App\Tool\WebScraperTool'
+        - 'App\Tool\ApiClientTool'
         
       fault_tolerant_toolbox: true
+      ### Alternative LLM Configurations for the File Generator Agent openAi ###
+    file_generator_openAi:
+      platform: 'ai.platform.openai'
+      model: 'gpt-3.5-turbo' # oder 'gpt-4-turbo', 'gpt-4o' etc.
+      track_token_usage: true
+      prompt:
+        file: '%kernel.project_dir%/config/prompts/file_generator_prompt.txt'
+        include_tools: true
+      tools:
+        - 'App\Tool\CodeSaverTool'
+        - 'App\Tool\KnowledgeIndexerTool'
+        - 'App\Tool\AnalyzeCodeTool'
+        - 'App\Tool\SandboxExecutorTool'
+        - 'App\Tool\DeployGeneratedCodeTool'
+        - 'App\Tool\WebScraperTool'
+        - 'App\Tool\ApiClientTool'
+      fault_tolerant_toolbox: true
+    ### Alternative LLM Configurations for the File Generator Agent claude ###
+    file_generator_claud:
+      platform: 'ai.platform.anthropic'
+      model: 'claude-3-opus-20240229' # oder 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'
+      track_token_usage: true
+      prompt:
+        file: '%kernel.project_dir%/config/prompts/file_generator_prompt.txt'
+        include_tools: true
+      tools:
+        - 'App\Tool\CodeSaverTool'
+        - 'App\Tool\KnowledgeIndexerTool'
+        - 'App\Tool\AnalyzeCodeTool'
+        - 'App\Tool\SandboxExecutorTool'
+        - 'App\Tool\DeployGeneratedCodeTool'
+        - 'App\Tool\WebScraperTool'
+        - 'App\Tool\ApiClientTool'
+      fault_tolerant_toolbox: true
+    #   personal_assistent:
+    personal_assistent:
+      platform: 'ai.platform.gemini'
+      model: 'gemini-2.5-flash'
+      track_token_usage: true
+      prompt:
+        file: '%kernel.project_dir%/config/prompts/file_personal_assistent_prompt.txt'
+        include_tools: true
+      tools:
+        #- 'App\Tool\CodeSaverTool'
+        #- 'App\Tool\KnowledgeIndexerTool'
+        #- 'App\Tool\AnalyzeCodeTool'
+        #- 'App\Tool\SandboxExecutorTool'
+        #- 'App\Tool\DeployGeneratedCodeTool'
+        - 'App\Tool\WebScraperTool'
+        - 'App\Tool\ApiClientTool'
+        
+      fault_tolerant_toolbox: true
+      ### Alternative LLM Configurations for the File Generator Agent openAi ###
+    
+
+

@@ -1,97 +1,80 @@
-# Roadmap zur Entwicklung eines Super AI Agenten
+# 🚀 Roadmap: Transformation zum Super AI Agenten (Jens-Dev-Agent v2.0+)
 
-Dieses Dokument skizziert die Roadmap, um das aktuelle Symfony-Projekt zu einem selbstentwickelnden "Super AI Agenten" auszubauen, der eine breite Palette von Aufgaben bewältigen kann, von der Jobsuche bis zur komplexen Code-Erstellung. Der Fokus liegt auf der Nutzung von AI-System-Prompts und der Entwicklung neuer, spezialisierter Tools.
+Ein autonomer, proaktiver und vielseitiger AI-Agent, der komplexe, multimodale Aufgaben selbstständig planen, ausführen und optimieren kann.
 
-## 1. Fundamentale Erweiterungen der AI-Prompt-Verwaltung
+---
 
-Um die Vielseitigkeit des Agenten zu gewährleisten, ist eine flexible und leistungsstarke Verwaltung von AI-System-Prompts unerlässlich.
+## 💡 Vision: Der Super AI Agent (Jens-Dev-Agent v2.0+)
 
-### 1.1. Dynamische Prompt-Generierung und -Optimierung
-*   **Ziel:** Der Agent soll in der Lage sein, Prompts basierend auf der aktuellen Aufgabe und dem Kontext dynamisch zu generieren, zu verfeinern und zu optimieren.
-*   **Maßnahmen:**
-    *   **Prompt-Templates:** Implementierung eines Systems für parametrisierbare Prompt-Templates, die in der Datenbank oder als Konfigurationsdateien gespeichert werden.
-    *   **Kontext-Extraktion:** Entwicklung von Mechanismen zur Extraktion relevanter Informationen aus Benutzeranfragen, Projektdaten und der Wissensbasis, um Prompts anzureichern.
-    *   **Prompt-Evaluierung:** Einführung von Metriken zur Bewertung der Effektivität von Prompts (z.B. anhand von Erfolgsraten bei der Aufgabenerfüllung) und Mechanismen zur iterativen Verbesserung.
+Der Agent wird in der Lage sein, komplexe, multimodale Aufgaben selbstständig zu planen, auszuführen und zu optimieren, einschließlich der intelligenten Identifizierung und Nutzung externer Tools, wie z.B. der eigenständigen Erstellung kompletter Bewerbungen.
 
-### 1.2. Prompt-Versionierung und -Historie
-*   **Ziel:** Nachvollziehbarkeit und Rollback-Fähigkeit für Prompt-Änderungen.
-*   **Maßnahmen:**
-    *   **Datenbank-Schema-Erweiterung:** Speicherung von Prompt-Versionen mit Änderungsdatum, Autor und Begründung.
-    *   **UI/API für Prompt-Verwaltung:** Eine Schnittstelle zur einfachen Anzeige, Bearbeitung und Wiederherstellung alter Prompt-Versionen.
+## ⚙️ Aktueller Stand (Jens-Dev-Agent v1.0 - PHP/Symfony-Spezialist)
 
-## 2. Entwicklung neuer Tools (AsTool) für erweiterte Fähigkeiten
+Der aktuelle Agent ist primär auf **PHP/Symfony-Entwicklungsaufgaben** spezialisiert und arbeitet auf Basis expliziter Anweisungen.
 
-Die aktuellen Tools bieten eine gute Basis, müssen aber durch spezifischere "AsTools" erweitert werden, um neue Anwendungsfälle abzudecken.
+### Kernkompetenzen
 
-### 2.1. Jobsuche & -analyse Toolset
-*   **Ziel:** Der Agent soll in der Lage sein, selbstständig nach relevanten Jobangeboten zu suchen, diese zu analysieren und Bewerbungsunterlagen zu generieren.
-*   **Maßnahmen:**
-    *   **`JobSearchTool`:** Integration mit Jobportalen APIs (z.B. LinkedIn, StepStone, Indeed) zur Suche nach Stellenanzeigen.
-    *   **`JobAnalyzerTool`:** Analyse von Stellenbeschreibungen zur Extraktion von Anforderungen, Keywords und zur Bewertung der Passung zum Benutzerprofil.
-    *   **`ApplicationGeneratorTool`:** Generierung von angepassten Anschreiben und Lebensläufen basierend auf den Analyseergebnissen und Benutzerdaten.
+* **Code-Generierung:** Erstellung von produktionsreifem PHP-Code, Konfigurationsdateien (YAML), Datenbankmigrationen und Tests.
+* **Code-Analyse:** Analyse bestehender Codebasen.
+* **Dokumentationsindexierung:** Verarbeitung und Indizierung von Wissen aus Dokumentationsdateien.
+* **Sandbox-Tests:** Ausführung von Code in einer isolierten, produktionsnahen Umgebung.
+* **Deployment-Vorbereitung:** Erstellung sicherer und rückgängig machbarer Deployment-Pakete.
+* **Sicherheits- und Qualitätsstandards:** Einhaltung hoher Standards bei der Code-Generierung.
 
-### 2.2. Erweiterte Code-Erstellungs- und Refactoring-Tools
-*   **Ziel:** Der Agent soll in der Lage sein, komplexeren Code zu generieren, bestehenden Code zu refaktorieren und bewährte Praktiken anzuwenden.
-*   **Maßnahmen:**
-    *   **`AdvancedCodeGeneratorTool`:** Unterstützung für komplexere Architekturen (z.B. Microservices, DDD), Design Patterns und sprachspezifische Best Practices.
-    *   **`CodeRefactoringTool`:** Analyse von Code-Smells, Refactoring-Vorschläge und automatische Anwendung von Refactorings (nach Bestätigung im Sandbox).
-    *   **`SecurityAuditorTool`:** Statische Code-Analyse zur Erkennung potenzieller Sicherheitslücken und Vorschläge zur Behebung.
+---
 
-### 2.3. Wissensmanagement und Lern-Tools
-*   **Ziel:** Der Agent soll sein Wissen kontinuierlich erweitern und aus Interaktionen lernen können.
-*   **Maßnahmen:**
-    *   **`KnowledgeIngestionTool`:** Automatische Aufnahme und Indexierung neuer Informationen aus verschiedenen Quellen (Webseiten, Dokumente, APIs) in die Wissensbasis.
-    *   **`FeedbackLoopTool`:** Implementierung eines Systems zur Erfassung von Benutzer-Feedback zu generierten Outputs, um die Agentenleistung zu verbessern.
+## 🗺️ Phasen der Entwicklung
 
-## 3. Selbstentwicklung des Agenten (Self-Evolution)
+### Phase 1: Erweiterung der Wahrnehmung und Kontextualisierung (Kurzfristig - 1-3 Monate)
 
-Der Kern des "Super AI Agenten" ist seine Fähigkeit zur Selbstentwicklung.
+**Ziel:** Dem Agenten ermöglichen, Informationen aus externen Quellen zu beschaffen und ein tieferes Verständnis des Benutzerbedarfs zu entwickeln.
 
-### 3.1. Generierung neuer Tools (AsTool-Erstellung)
-*   **Ziel:** Der Agent soll in der Lage sein, neue "AsTools" oder Teile davon selbst zu entwerfen und zu implementieren, basierend auf identifizierten Lücken oder neuen Anforderungen.
-*   **Maßnahmen:**
-    *   **`ToolDefinitionGenerator`:** Ein spezieller Prompt, der dem Agenten Anweisungen gibt, welche Art von Tool benötigt wird (Name, Zweck, Eingabe, Ausgabe, Schnittstellen), und dieser dann eine Tool-Definition (z.B. als YAML oder PHP-Klasse) generiert.
-    *   **`CodeGeneratorTool` (erweitert):** Erweiterung des bestehenden Code-Generators, um die generierte Tool-Definition in ausführbaren PHP-Code umzusetzen, inklusive entsprechender `AsTool`-Interface-Implementierung.
-    *   **Sandbox-Validierung:** Jeder generierte Tool-Code muss **vollständig** im Sandbox getestet und validiert werden, bevor er zur Bereitstellung vorgeschlagen wird.
+| Fokus | Maßnahme | Erforderlich |
+| :--- | :--- | :--- |
+| **1.1 Externe Datenakquise** | Entwicklung eines `web_scraper` oder `api_client` Tools (URL-Zugriff, DOM-Parsing, Datenextraktion). | **Admin-Deployment** |
+| **1.2 Erweiterte Sprachverarbeitung** | Verbesserung der **NLU/NLP** zur Zerlegung komplexer, impliziter Anweisungen in mehrstufige Workflows (Intent-Erkennung, Entitätenextraktion). | **Training/Modell-Update** |
+| **1.3 Self-Correction im Workflow** | Fähigkeit zur proaktiven Identifizierung fehlender Informationen und zur Klärung (z.B. Abfrage genauer Adressdaten). | **Logik-Implementierung** |
 
-### 3.2. Selbstoptimierung von Prompts und Verhaltensweisen
-*   **Ziel:** Der Agent soll seine eigenen Prompts und Entscheidungsstrategien autonom verbessern können.
-*   **Maßnahmen:**
-    *   **`PromptOptimizer`:** Ein interner Prozess, der die Leistung der Prompts überwacht und basierend auf Erfolgs-/Fehlerquoten und Feedback Anpassungen vorschlägt.
-    *   **Reinforcement Learning (optional):** Für komplexere Szenarien könnte ein Reinforcement Learning-Ansatz in Betracht gezogen werden, bei dem der Agent Belohnungen für erfolgreiche Aufgabenerfüllungen erhält und seine Strategien entsprechend anpasst.
+### Phase 2: Autonome Workflow-Orchestrierung (Mittelfristig - 3-6 Monate)
 
-## 4. User-Gated Deployment (Freigabe ins Prod-System)
+**Ziel:** Implementierung einer internen Logik zur selbstständigen Planung, Ausführung und Überwachung komplexer, zustandsbehafteter Workflows.
 
-Der Prozess der Freigabe ins Produktionssystem muss weiterhin durch den Benutzer explizit erfolgen. Dies gewährleistet Kontrolle und Sicherheit.
+| Fokus | Maßnahme | Erforderlich |
+| :--- | :--- | :--- |
+| **2.1 Workflow-Manager** | Implementierung einer internen **Task-Graph-Engine** (Aufgabenplanung, Abhängigkeitsmanagement, Fehlerbehandlung). | **Logik-Implementierung** |
+| **2.2 Zustandsspeicherung** | Persistenz von Zwischenergebnissen, Benutzerpräferenzen und Historie über mehrere Interaktionen hinweg. | **Datenbank/Speicher-Setup** |
+| **2.3 Dynamische Tool-Erkennung** | Der Agent identifiziert fehlende Tools (`email_sender`), schlägt dem Admin Spezifikationen vor und integriert das Tool nach **Admin-Freigabe** und Deployment. | **Admin-Intervention** |
 
-### 4.1. Aktueller Zustand & Bestätigung
-*   **Ziel:** Sicherstellen, dass der bestehende Freigabeprozess (`deploy_generated_code` Tool) robust und transparent bleibt.
-*   **Maßnahmen:**
-    *   **Detaillierte Änderungsübersicht:** Vor der Freigabe muss der Benutzer eine klare und umfassende Übersicht über alle vorgeschlagenen Änderungen (neue Tools, geänderte Prompts, Code-Updates) erhalten.
-    *   **Explizite Bestätigung:** Der `deploy_generated_code` muss eine explizite Bestätigung vom Benutzer erfordern, idealerweise mit einer Zusammenfassung der Auswirkungen der Änderungen.
+### Phase 3: Spezialisierung: Der Bewerbungs-Assistent (Langfristig - 6-12 Monate)
 
-### 4.2. Rollback-Mechanismen
-*   **Ziel:** Die Möglichkeit, im Falle von Problemen im Produktionssystem schnell auf eine frühere, stabile Version zurückzugreifen.
-*   **Maßnahmen:**
-    *   **Versionierung von Deployment-Artefakten:** Sicherstellung, dass alle bereitgestellten Dateien und Konfigurationen versioniert werden.
-    *   **Automatisierte Rollback-Skripte:** Bereitstellung von Skripten, die bei Bedarf eine frühere Version des Agenten wiederherstellen können.
+**Ziel:** Implementierung des Beispiel-Workflows „Bewerbungen erstellen“ als konkrete Demonstration der neuen Fähigkeiten.
 
-## 5. Überwachung und Auditierung
+| Fokus | Tool/Maßnahme | Beschreibung | Erforderlich |
+| :--- | :--- | :--- | :--- |
+| **3.1 Jobbörsen-Integration** | `job_search_tool` | Nutzung von Jobbörsen-APIs oder spezialisiertem Web-Scraping zur Stellensuche. | **Admin-Deployment** |
+| **3.2 Dokumentengenerierung** | `document_generator` | Erstellung und Anpassung von Anschreiben/Lebensläufen auf Basis von Profil- und Stellenanforderungen (LLM-basiert, Word/PDF-Export). | **Admin-Deployment** |
+| **3.3 E-Mail-Versand** | `email_sender` | Sicherer Versand von E-Mails mit Betreff, Inhalt und Anhängen (Bewerbungsunterlagen). | **Admin-Deployment** |
+| **3.4 Benutzer-Freigabe** | Explizite `Approval`-Phase | Generierte Unterlagen werden dem Benutzer zur Prüfung vorgelegt; Versand nur nach expliziter Bestätigung. | **Logik-Implementierung** |
 
-Um die Selbstentwicklung und die komplexen Operationen des Agenten zu verstehen und zu kontrollieren, sind umfassende Überwachungs- und Auditierungsfunktionen notwendig.
+### Phase 4: Erweiterte Autonomie und Selbstoptimierung (Zukünftig)
 
-### 5.1. Erweiterte Logging- und Audit-Trails
-*   **Ziel:** Jede wichtige Aktion des Agenten (Prompt-Generierung, Tool-Ausführung, Code-Änderung, Lernprozesse) muss lückenlos protokolliert werden.
-*   **Maßnahmen:**
-    *   **Strukturierte Logs:** Verwendung eines strukturierten Logging-Ansatzes (z.B. Monolog mit spezifischen Kontextinformationen).
-    *   **Audit-Trail-Datenbank:** Spezielle Datenbanktabellen für Audit-Informationen, die Änderungen an Prompts, Tools und Konfigurationen erfassen.
+**Ziel:** Weiterentwicklung zu einem proaktiven, lernenden System.
 
-### 5.2. Performance-Monitoring
-*   **Ziel:** Überwachung der Leistung und Effizienz des Agenten, um Engpässe und Verbesserungspotenziale zu identifizieren.
-*   **Maßnahmen:**
-    *   **Metrik-Sammlung:** Erfassung von Metriken wie Antwortzeiten, Ressourcennutzung, Erfolgsraten von Tools und Prompts.
-    *   **Dashboard-Integration:** Visualisierung dieser Metriken in einem Monitoring-Dashboard (z.B. Grafana).
+* **4.1 Kontinuierliches Lernen:** Integration von Feedback und Erfolgsraten zur Anpassung interner Modelle und Strategien.
+* **4.2 Proaktive Problemidentifikation:** Vorausschauendes Erkennen und Lösen potenzieller Schwierigkeiten (z.B. API-Ausfälle, Profil-Nicht-Zugriff).
+* **4.3 Multimodale Interaktion:** Erweiterung der Schnittstelle zur Verarbeitung und Generierung von Bildern, Sprache und anderen Medien.
 
-## Fazit
+---
 
-Die Transformation zu einem "Super AI Agenten" ist ein iterativer Prozess, der eine schrittweise Implementierung und kontinuierliche Validierung erfordert. Durch die konsequente Weiterentwicklung der Prompt-Verwaltung, die Einführung spezialisierter AsTools und die Implementierung von Selbstentwicklungsfähigkeiten, immer unter der strengen Kontrolle der Sandbox-Validierung und der expliziten Benutzerfreigabe für die Produktion, kann dieses Projekt sein volles Potenzial entfalten.
+## 🔒 Querschnittsthemen
+
+Um die Stabilität und Sicherheit des Super AI Agenten zu gewährleisten, müssen folgende Aspekte kontinuierlich betrachtet werden:
+
+* **Sicherheit:** Kontinuierliche Überprüfung und Verbesserung der Sicherheitsmechanismen für alle neuen Tools und externen Zugriffe (insbesondere bei sensiblen Daten wie E-Mails/Profilen).
+* **Skalierbarkeit:** Sicherstellung der effizienten Verarbeitung einer wachsenden Anzahl komplexer Workflows.
+* **Performance:** Optimierung der Ausführungszeiten, insbesondere bei datenintensiven Aufgaben.
+* **Admin-Freigabeprozess:** Jeder neue "AsTool" oder jede größere Systemänderung muss den etablierten **Admin-Freigabe- und Deployment-Prozess** durchlaufen.
+
+---
+
+> Der Schlüssel liegt in der schrittweisen Erweiterung seiner Wahrnehmungsfähigkeit, seiner internen Planungslogik und seiner Fähigkeit, die richtigen Werkzeuge zur richtigen Zeit einzusetzen – oder deren Entwicklung anzustoßen.

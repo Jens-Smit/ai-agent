@@ -55,9 +55,8 @@ security:
         # AI Datei-Generierung (öffentlich zugänglich)
         - { path: ^/api/agent, roles: PUBLIC_ACCESS }
         - { path: ^/api/index-knowledge, roles: PUBLIC_ACCESS }
-        
-       
-        
+        - { path: ^/api/devAgent, roles: PUBLIC_ACCESS }
+
         # Health-Check (falls vorhanden)
         - { path: ^/health$, roles: PUBLIC_ACCESS }
         
@@ -67,14 +66,7 @@ security:
         # Passwortd ändern für authentifizierte Benutzer
         - { path: ^/api/password/change, roles: IS_AUTHENTICATED_FULLY }
 
-        # Posts: Schreib-, Update- und Löschzugriff
-        - { path: ^/api/posts$, roles: IS_AUTHENTICATED_FULLY, methods: [POST] }
-        - { path: ^/api/posts/\d+$, roles: IS_AUTHENTICATED_FULLY, methods: [PUT, PATCH, DELETE] }
-        - { path: ^/api/posts/upload$, roles: IS_AUTHENTICATED_FULLY, methods: [POST] }
-        
-        # Kategorien: Schreib-, Update- und Löschzugriff
-        - { path: ^/api/categories, roles: IS_AUTHENTICATED_FULLY, methods: [POST, PUT, PATCH, DELETE] }
-        
+      
         # Passwort ändern (nur für authentifizierte Benutzer)
         - { path: ^/api/password/change$, roles: IS_AUTHENTICATED_FULLY }
         
