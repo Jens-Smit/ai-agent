@@ -38,6 +38,24 @@ ai:
         - 'App\Tool\ApiClientTool'
         
       fault_tolerant_toolbox: true
+
+    frontend_generator:
+      platform: 'ai.platform.gemini'
+      model: 'gemini-2.5-flash'
+      track_token_usage: true
+      prompt:
+        file: '%kernel.project_dir%/config/prompts/frontend_dev_prompt.txt'
+        include_tools: true
+      tools:
+        - 'App\Tool\CodeSaverTool'
+        - 'App\Tool\KnowledgeIndexerTool'
+        - 'App\Tool\AnalyzeCodeTool'
+        - 'App\Tool\SandboxExecutorTool'
+        - 'App\Tool\DeployGeneratedCodeTool'
+        - 'App\Tool\WebScraperTool'
+        - 'App\Tool\ApiClientTool'
+        
+      fault_tolerant_toolbox: true
       ### Alternative LLM Configurations for the File Generator Agent openAi ###
     file_generator_openAi:
       platform: 'ai.platform.openai'
@@ -88,6 +106,9 @@ ai:
         #- 'App\Tool\DeployGeneratedCodeTool'
         - 'App\Tool\WebScraperTool'
         - 'App\Tool\ApiClientTool'
+        - 'App\Tool\DevAgentTools'
+        - 'App\Tool\ToolDefinitionGenerator'
+        - 'App\Tool\ToolDevelopmentAssistantTools'
         
       fault_tolerant_toolbox: true
       ### Alternative LLM Configurations for the File Generator Agent openAi ###

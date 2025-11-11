@@ -67,17 +67,37 @@ services:
         tags:
             # WICHTIG: Manuelles Tagging für das AI-Bundle
             - { name: 'symfony.ai.tool', alias: 'run_code_in_sandbox' }
-
+    # WebScraperTool
     App\Tool\WebScraperTool:
         arguments:
             $httpClient: '@http_client'
             $logger: '@logger'
         tags: ['ai.tool']
-
+    # ApiClientTool
     App\Tool\ApiClientTool:
         arguments:
             $httpClient: '@http_client'
             $logger: '@logger'
         tags: ['ai.tool'] 
-    
+    # DevAgentTools
+    App\Tool\DevAgentTools:
+        arguments:
+            $httpClient: '@http_client'
+            $logger: '@logger'
+        tags: 
+            - { name: 'ai.tool' }
+    # ToolDefinitionGenerator    
+    App\Tool\ToolDefinitionGenerator:
+        arguments:
+            $httpClient: '@http_client'
+            $logger: '@logger'
+        tags: ['ai.tool']
+
+    App\Tool\ToolDevelopmentAssistantTools:
+        arguments:
+            $logger: '@logger'
+        tags: ['ai.tool']    
+                 
+                     
+            
         
