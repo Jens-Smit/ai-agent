@@ -36,7 +36,10 @@ services:
         arguments:
             $jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
             $userProvider: '@security.user.provider.concrete.app_user_provider'
-    
+    # Google Authenticator
+    App\Security\GoogleAuthenticator:
+        arguments:
+            $userProvider: '@security.user.provider.concrete.app_user_provider'
     # CodeSaverTool
     App\Tool\CodeSaverTool:
         arguments:
@@ -79,24 +82,14 @@ services:
             $httpClient: '@http_client'
             $logger: '@logger'
         tags: ['ai.tool'] 
-    # DevAgentTools
-    App\Tool\DevAgentTools:
+    # ToolRequestor
+    App\Tool\ToolRequestor:
         arguments:
             $httpClient: '@http_client'
             $logger: '@logger'
         tags: 
             - { name: 'ai.tool' }
-    # ToolDefinitionGenerator    
-    App\Tool\ToolDefinitionGenerator:
-        arguments:
-            $httpClient: '@http_client'
-            $logger: '@logger'
-        tags: ['ai.tool']
-
-    App\Tool\ToolDevelopmentAssistantTools:
-        arguments:
-            $logger: '@logger'
-        tags: ['ai.tool']    
+    
                  
                      
             

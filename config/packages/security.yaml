@@ -1,3 +1,4 @@
+
 security:
     password_hashers:
         Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface: 'auto'
@@ -7,7 +8,8 @@ security:
             entity:
                 class: App\Entity\User
                 property: email
-
+        app_google_user_provider:
+            id: App\Security\GoogleUserProvider
     firewalls:
         # 1. Dev-Firewall für Profiler, etc.
         dev:
@@ -32,6 +34,7 @@ security:
             # Custom Authenticators für JWT-basierte Authentifizierung
             custom_authenticators:
                 - App\Security\JwtTokenAuthenticator
+                - App\Security\GoogleAuthenticator
             
            
 
@@ -56,17 +59,26 @@ security:
         - { path: ^/api/agent, roles: PUBLIC_ACCESS }
         - { path: ^/api/index-knowledge, roles: PUBLIC_ACCESS }
         - { path: ^/api/devAgent, roles: PUBLIC_ACCESS }
+        - { path: ^/api/frondend_devAgent, roles: PUBLIC_ACCESS }
 
         # Health-Check (falls vorhanden)
         - { path: ^/health$, roles: PUBLIC_ACCESS }
-        
+        - { path: ^/connect/google, roles: PUBLIC_ACCESS }
+        - { path: ^/connect/google/check, roles: PUBLIC_ACCESS }
+        - { path: ^/profile, roles: PUBLIC_ACCESS }
         # ========================================
         # GESCHÜTZTE ROUTEN (Authentifizierung erforderlich)
         # ========================================
+       
+        
+        - { path: ^/api/password/change, roles: IS_AUTHENTICATED_FULLY }
+
+
+
         # Passwortd ändern für authentifizierte Benutzer
         - { path: ^/api/password/change, roles: IS_AUTHENTICATED_FULLY }
 
-      
+        - { path: ^/profile, roles: IS_AUTHENTICATED_REMEMBERED }
         # Passwort ändern (nur für authentifizierte Benutzer)
         - { path: ^/api/password/change$, roles: IS_AUTHENTICATED_FULLY }
         

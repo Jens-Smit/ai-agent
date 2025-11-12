@@ -1,0 +1,15 @@
+# config/routes/google_oauth.yaml
+google_oauth_start:
+    path: /connect/google
+    controller: App\\Controller\\GoogleOAuthController::connect
+    methods: [GET]
+
+connect_google_check:
+    path: /connect/google/check
+    controller: App\\Controller\\GoogleOAuthController::connectCheck
+    methods: [GET]
+
+app_profile:
+    path: /profile
+    controller: App\\Controller\\GoogleOAuthController::profile
+    methods: [GET]

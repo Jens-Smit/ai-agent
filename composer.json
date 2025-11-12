@@ -18,6 +18,8 @@
     "ezyang/htmlpurifier": "^4.19",
     "gesdinet/jwt-refresh-token-bundle": "^1.5",
     "google-gemini-php/symfony": "*",
+    "knpuniversity/oauth2-client-bundle": "2.19",
+    "league/oauth2-google": "*",
     "lexik/jwt-authentication-bundle": "^3.0",
     "nelmio/api-doc-bundle": "^4.38",
     "nelmio/cors-bundle": "^2.5",

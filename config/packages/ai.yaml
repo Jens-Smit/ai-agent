@@ -37,6 +37,7 @@ ai:
         - 'App\Tool\WebScraperTool'
         - 'App\Tool\ApiClientTool'
         
+        
       fault_tolerant_toolbox: true
 
     frontend_generator:
@@ -106,9 +107,8 @@ ai:
         #- 'App\Tool\DeployGeneratedCodeTool'
         - 'App\Tool\WebScraperTool'
         - 'App\Tool\ApiClientTool'
-        - 'App\Tool\DevAgentTools'
-        - 'App\Tool\ToolDefinitionGenerator'
-        - 'App\Tool\ToolDevelopmentAssistantTools'
+        - 'App\Tool\ToolRequestor'
+                
         
       fault_tolerant_toolbox: true
       ### Alternative LLM Configurations for the File Generator Agent openAi ###

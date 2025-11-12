@@ -15,7 +15,6 @@ final class DeployGeneratedCodeTool
     private string $projectDir;
     private Filesystem $filesystem;
     private LoggerInterface $logger;
-    private const GENERATED_CODE_DIR = '/generated_code/';
 
     public function __construct(KernelInterface $kernel, LoggerInterface $logger)
     {
@@ -25,22 +24,25 @@ final class DeployGeneratedCodeTool
     }
 
     /**
-     * Erstellt ein sicheres Deployment-Paket mit Rollback-Fähigkeit
+     * Erstellt ein sicheres Deployment-Paket mit Rollback-Fähigkeit.
      *
-     * @param array<array{source_file: string, target_path: string, type?: string}> $filesToDeploy
-     * @param bool $createBackup Erstelle Backup vor Deployment (empfohlen)
-     * @param bool $runTests Führe Tests nach Deployment aus
-     * @return string Deployment-Anweisungen und Skript-Pfad
+     * @param array<array{source_file: string, target_path: string, type?: string}> $filesToDeploy Ein Array von Dateinformationen zum Bereitstellen.
+     * @param bool $createBackup Erstelle Backup vor Deployment (empfohlen).
+     * @param bool $runTests Führe Tests nach Deployment aus.
+     * @param string $sourceBaseDir Der Basisverzeichnis-Pfad, in dem die zu bereitstellenden Dateien liegen (z.B. generated_code/timestamp_uniqid/).
+     * @return string Deployment-Anweisungen und Skript-Pfad.
      */
     public function __invoke(
         array $filesToDeploy,
         bool $createBackup = true,
-        bool $runTests = true
+        bool $runTests = true,
+        string $sourceBaseDir = __DIR__ . '/../../generated_code/' // New parameter with default
     ): string {
-        $generatedCodePath = $this->projectDir . self::GENERATED_CODE_DIR;
+        // Ensure sourceBaseDir ends with a slash
+        $sourceBaseDir = rtrim($sourceBaseDir, '/').'/' ;
 
-        if (!$this->filesystem->exists($generatedCodePath)) {
-            return 'ERROR: generated_code directory does not exist.';
+        if (!$this->filesystem->exists($sourceBaseDir)) {
+            return sprintf('ERROR: Source directory "%s" does not exist.', $sourceBaseDir);
         }
 
         if (empty($filesToDeploy)) {
@@ -49,13 +51,17 @@ final class DeployGeneratedCodeTool
 
         $timestamp = (new \DateTime())->format('YmdHis');
         
-        // Erstelle Deployment-Verzeichnis
-        $deploymentDir = $generatedCodePath . 'deployments/' . $timestamp;
+        // Erstelle Deployment-Verzeichnis im Haupt-generated_code/deployments/ Verzeichnis
+        $baseGeneratedCodePath = $this->projectDir . '/generated_code/';
+        if (!$this->filesystem->exists($baseGeneratedCodePath)) {
+             $this->filesystem->mkdir($baseGeneratedCodePath, 0777, true);
+        }
+        $deploymentDir = $baseGeneratedCodePath . 'deployments/' . $timestamp;
         $this->filesystem->mkdir($deploymentDir);
 
         try {
             // 1. Validiere alle Dateien
-            $validation = $this->validateDeployment($filesToDeploy);
+            $validation = $this->validateDeployment($filesToDeploy, $sourceBaseDir);
             if (!$validation['valid']) {
                 return $this->formatValidationErrors($validation['errors']);
             }
@@ -64,7 +70,7 @@ final class DeployGeneratedCodeTool
             $analysis = $this->analyzeChanges($filesToDeploy);
             
             // 3. Erstelle Deployment-Manifest
-            $manifest = $this->createManifest($filesToDeploy, $analysis, $timestamp);
+            $manifest = $this->createManifest($filesToDeploy, $analysis, $timestamp, $sourceBaseDir);
             $this->filesystem->dumpFile(
                 $deploymentDir . '/manifest.json',
                 json_encode($manifest, JSON_PRETTY_PRINT)
@@ -80,7 +86,8 @@ final class DeployGeneratedCodeTool
                 $deploymentDir,
                 $manifest,
                 $createBackup,
-                $runTests
+                $runTests,
+                $sourceBaseDir // Pass the sourceBaseDir to the script creation
             );
 
             // 6. Erstelle Rollback-Skript
@@ -93,7 +100,8 @@ final class DeployGeneratedCodeTool
 
         } catch (\Exception $e) {
             $this->logger->error('Deployment preparation failed', [
-                'exception' => $e->getMessage()
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
             return sprintf('ERROR: Deployment preparation failed: %s', $e->getMessage());
         }
@@ -102,10 +110,9 @@ final class DeployGeneratedCodeTool
     /**
      * Validiert Deployment-Anfrage
      */
-    private function validateDeployment(array $filesToDeploy): array
+    private function validateDeployment(array $filesToDeploy, string $sourceBaseDir): array
     {
         $errors = [];
-        $generatedCodePath = $this->projectDir . self::GENERATED_CODE_DIR;
 
         foreach ($filesToDeploy as $index => $fileInfo) {
             $sourceFile = $fileInfo['source_file'] ?? null;
@@ -116,25 +123,26 @@ final class DeployGeneratedCodeTool
                 continue;
             }
 
-            // Validiere Source
+            // Validiere Source: Muss ein Dateiname sein, kein Pfad-Traversal
             if (basename($sourceFile) !== $sourceFile) {
-                $errors[] = "Source '{$sourceFile}': Path traversal detected";
+                $errors[] = "Source '{$sourceFile}': Path traversal detected in source_file";
                 continue;
             }
 
-            $fullSourcePath = $generatedCodePath . $sourceFile;
+            $fullSourcePath = $sourceBaseDir . $sourceFile;
             if (!$this->filesystem->exists($fullSourcePath)) {
-                $errors[] = "Source '{$sourceFile}': File not found";
+                $errors[] = "Source '{$sourceFile}': File not found at '{$fullSourcePath}'";
                 continue;
             }
 
-            // Validiere Target
+            // Validiere Target: Darf nicht außerhalb des Projekts auflösen
             $fullTargetPath = $this->projectDir . '/' . ltrim($targetPath, '/');
-            $resolvedTarget = realpath(dirname($fullTargetPath));
+            // Realpath ist wichtig, um Symlinks und ../ zu berücksichtigen
+            $resolvedTargetDir = realpath(dirname($fullTargetPath));
             $projectRoot = realpath($this->projectDir);
 
-            if ($resolvedTarget === false || !str_starts_with($resolvedTarget, $projectRoot)) {
-                $errors[] = "Target '{$targetPath}': Resolves outside project root";
+            if ($resolvedTargetDir === false || !str_starts_with($resolvedTargetDir, $projectRoot)) {
+                $errors[] = "Target '{$targetPath}': Resolves outside project root ({$resolvedTargetDir})";
             }
         }
 
@@ -154,6 +162,7 @@ final class DeployGeneratedCodeTool
             'config_files' => [],
             'test_files' => [],
             'migration_files' => [],
+            'env_files' => [], // New category for .env files
             'requires_composer_update' => false,
             'requires_cache_clear' => false,
             'requires_migration' => false
@@ -175,6 +184,10 @@ final class DeployGeneratedCodeTool
                 case 'test':
                     $analysis['test_files'][] = $targetPath;
                     break;
+                case 'env': // Handle .env files
+                    $analysis['env_files'][] = $targetPath;
+                    // .env changes don't necessarily require cache clear, but good to note
+                    break;
                 case 'composer':
                     $analysis['requires_composer_update'] = true;
                     break;
@@ -195,20 +208,21 @@ final class DeployGeneratedCodeTool
         if (str_contains($path, 'migrations/')) return 'migration';
         if (str_contains($path, 'tests/')) return 'test';
         if (str_contains($path, 'composer.json')) return 'composer';
+        if (str_ends_with($path, '.env')) return 'env'; // Specific check for .env
         return 'code';
     }
 
     /**
      * Erstellt Deployment-Manifest
      */
-    private function createManifest(array $filesToDeploy, array $analysis, string $timestamp): array
+    private function createManifest(array $filesToDeploy, array $analysis, string $timestamp, string $sourceBaseDir): array
     {
         return [
             'version' => '1.0',
             'timestamp' => $timestamp,
             'files' => $filesToDeploy,
             'analysis' => $analysis,
-            'checksums' => $this->calculateChecksums($filesToDeploy),
+            'checksums' => $this->calculateChecksums($filesToDeploy, $sourceBaseDir),
             'php_version' => PHP_VERSION,
             'symfony_version' => \Symfony\Component\HttpKernel\Kernel::VERSION
         ];
@@ -217,17 +231,18 @@ final class DeployGeneratedCodeTool
     /**
      * Berechnet Checksums für Dateien
      */
-    private function calculateChecksums(array $filesToDeploy): array
+    private function calculateChecksums(array $filesToDeploy, string $sourceBaseDir): array
     {
         $checksums = [];
-        $generatedCodePath = $this->projectDir . self::GENERATED_CODE_DIR;
 
         foreach ($filesToDeploy as $fileInfo) {
             $sourceFile = $fileInfo['source_file'];
-            $fullPath = $generatedCodePath . $sourceFile;
+            $fullPath = $sourceBaseDir . $sourceFile;
             
-            if ($this->filesystem->exists($fullPath)) {
+            if ($this->filesystem->exists($fullPath) && is_file($fullPath)) { // Ensure it's a file
                 $checksums[$sourceFile] = hash_file('sha256', $fullPath);
+            } else {
+                $this->logger->warning('Could not calculate checksum for non-existent or directory file.', ['path' => $fullPath]);
             }
         }
 
@@ -276,7 +291,8 @@ final class DeployGeneratedCodeTool
         string $deploymentDir,
         array $manifest,
         bool $createBackup,
-        bool $runTests
+        bool $runTests,
+        string $sourceBaseDir // Added sourceBaseDir here
     ): string {
         $script = "#!/bin/bash\n\n";
         $script .= "# Deployment Script - Created " . date('Y-m-d H:i:s') . "\n";
@@ -284,7 +300,7 @@ final class DeployGeneratedCodeTool
         $script .= "set -e\n\n";
         
         $script .= "PROJECT_ROOT=\"" . $this->projectDir . "\"\n";
-        $script .= "GENERATED_CODE=\"\$PROJECT_ROOT" . self::GENERATED_CODE_DIR . "\"\n";
+        $script .= "SOURCE_CODE_BASE=\"" . $sourceBaseDir . "\"\n"; // Use the new sourceBaseDir
         $script .= "DEPLOYMENT_DIR=\"{$deploymentDir}\"\n";
         $script .= "BACKUP_DIR=\"\$DEPLOYMENT_DIR/backup\"\n\n";
         
@@ -310,7 +326,7 @@ final class DeployGeneratedCodeTool
             
             $script .= "echo \"  Deploying: {$targetPath}\"\n";
             $script .= "mkdir -p \"$(dirname {$fullTarget})\"\n";
-            $script .= "cp \"\$GENERATED_CODE{$sourceFile}\" \"{$fullTarget}\"\n";
+            $script .= "cp \"\$SOURCE_CODE_BASE{$sourceFile}\" \"{$fullTarget}\"\n"; // Use SOURCE_CODE_BASE
         }
         $script .= "echo \"✓ Files deployed\"\n";
         $script .= "echo \"\"\n\n";
@@ -438,13 +454,13 @@ final class DeployGeneratedCodeTool
         $readme .= "## 📋 Deployment Summary\n\n";
         $readme .= "### Files to Deploy\n";
         foreach ($manifest['files'] as $fileInfo) {
-            $readme .= "- `{$fileInfo['target_path']}`\n";
+            $readme .= "- `{$fileInfo['target_path']}` (Type: {$fileInfo['type']})\n";
         }
         $readme .= "\n";
         
         $analysis = $manifest['analysis'];
         $readme .= "### Required Actions\n";
-        $readme .= "- Backup: " . (isset($manifest['backup']) ? "✅ Yes" : "❌ No") . "\n";
+        $readme .= "- Backup: " . ($manifest['analysis']['backup_created'] ?? false ? "✅ Yes" : "❌ No") . "\n"; // Check for backup_created flag
         $readme .= "- Composer Update: " . ($analysis['requires_composer_update'] ? "✅ Yes" : "❌ No") . "\n";
         $readme .= "- Cache Clear: " . ($analysis['requires_cache_clear'] ? "✅ Yes" : "❌ No") . "\n";
         $readme .= "- Database Migration: " . ($analysis['requires_migration'] ? "✅ Yes" : "❌ No") . "\n\n";
@@ -469,7 +485,7 @@ final class DeployGeneratedCodeTool
         $readme .= "## 🔄 Rollback\n\n";
         $readme .= "If something goes wrong:\n";
         $readme .= "```bash\n";
-        $readme .= "bash 03_rollback.sh\n";
+        $readme .= "bash {$deploymentDir}/03_rollback.sh\n";
         $readme .= "```\n\n";
         
         $readme .= "## 📊 File Checksums\n\n";
@@ -519,6 +535,9 @@ final class DeployGeneratedCodeTool
         }
         if (!empty($manifest['analysis']['test_files'])) {
             $response .= "  • " . count($manifest['analysis']['test_files']) . " test files\n";
+        }
+        if (!empty($manifest['analysis']['env_files'])) { // Include .env files in summary
+            $response .= "  • " . count($manifest['analysis']['env_files']) . " .env files\n";
         }
         
         $response .= "\n";

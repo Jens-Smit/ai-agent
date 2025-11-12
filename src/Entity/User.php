@@ -1,63 +1,52 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Entity;
 
-use App\Repository\UserRepository;
-use Doctrine\Common\Collections\ArrayCollection;
-use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface;
 use Symfony\Component\Security\Core\User\UserInterface;
-use DateTimeImmutable;
-use OpenApi\Attributes as OA; 
-
-
+use App\Repository\UserRepository;
 
 #[ORM\Entity(repositoryClass: UserRepository::class)]
 #[ORM\Table(name: '`user`')]
-
 class User implements UserInterface, PasswordAuthenticatedUserInterface
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
-    #[ORM\Column]
+    #[ORM\Column(type: 'integer')]
     private ?int $id = null;
 
-    #[ORM\Column(length: 180, unique: true)]
-    private ?string $email = null;
+    #[ORM\Column(type: 'string', length: 180, unique: true)]
+    private string $email;
 
-    #[ORM\Column]
+    #[ORM\Column(type: 'json')]
     private array $roles = [];
 
-    /**
-     * @var string The hashed password
-     */
-    #[ORM\Column]
-    private ?string $password = null;
+    #[ORM\Column(type: 'string', nullable: true)]
+    private ?string $password = null; // Can be null for OAuth users
 
-    #[ORM\Column(length: 255, nullable: true)]
-    private ?string $resetTokenHash = null;
+    #[ORM\Column(type: 'string', length: 255, unique: true, nullable: true)]
+    private ?string $googleId = null; // Store the Google ID
 
-    // transient (not persisted) plain token for immediate use (e.g. to email or tests)
-    private ?string $resetToken = null;
-    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
-    private ?\DateTimeImmutable $resetTokenExpiresAt = null;
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    private ?string $name = null; // To store the user's name from Google
 
-   
-   
-  
+    #[ORM\Column(type: 'string', length: 255, nullable: true)]
+    private ?string $avatarUrl = null; // To store the user's avatar URL from Google
 
     public function getId(): ?int
     {
         return $this->id;
     }
 
-    public function getEmail(): ?string
+    public function getEmail(): string
     {
         return $this->email;
     }
 
-    public function setEmail(string $email): static
+    public function setEmail(string $email): self
     {
         $this->email = $email;
 
@@ -65,13 +54,11 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     }
 
     /**
-     * A visual identifier that represents this user.
-     *
      * @see UserInterface
      */
     public function getUserIdentifier(): string
     {
-        return (string) $this->email;
+        return $this->email;
     }
 
     /**
@@ -86,7 +73,7 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
         return array_unique($roles);
     }
 
-    public function setRoles(array $roles): static
+    public function setRoles(array $roles): self
     {
         $this->roles = $roles;
 
@@ -96,122 +83,60 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     /**
      * @see PasswordAuthenticatedUserInterface
      */
-    public function getPassword(): string
+    public function getPassword(): ?string
     {
         return $this->password;
     }
 
-    public function setPassword(string $password): static
+    public function setPassword(?string $password): self
     {
         $this->password = $password;
 
         return $this;
     }
-    
-     /**
-     * For tests / mailer: return the transient plain token if present.
-     */
-    public function getResetToken(): ?string
-    {
-        return $this->resetToken;
-    }
-    public function setResetToken(?string $token): static   
-    {
-        if ($token === null) {
-            $this->resetToken = null;
-            $this->resetTokenHash = null;
-            $this->resetTokenExpiresAt = null;
-            return $this;
-        }
-
-        $this->resetToken = $token;
-        $this->resetTokenHash = hash('sha256', $token);
-        $this->resetTokenExpiresAt = new DateTimeImmutable('+1 hour');
-
-        return $this;
-    }
-    /**
-     * Set transient plain token and persist only the hash + expiry
-     */
-    public function setResetTokenPlain(string $token, int $ttlSeconds = 3600): static
-    {
-        // keep transient plain token for immediate use (not persisted)
-        $this->resetToken = $token;
-
-        // store hash for persistence
-        $this->resetTokenHash = hash('sha256', $token);
-
-        $this->resetTokenExpiresAt = new DateTimeImmutable(sprintf('+%d seconds', $ttlSeconds));
-
-        return $this;
-    }
-
-    public function getResetTokenHash(): ?string
-    {
-        return $this->resetTokenHash;
-    }
-
-    public function getResetTokenExpiresAt(): ?\DateTimeImmutable
-    {
-        return $this->resetTokenExpiresAt;
-    }
-
-    public function clearResetToken(): static
-    {
-        $this->resetToken = null;
-        $this->resetTokenHash = null;
-        $this->resetTokenExpiresAt = null;
-        return $this;
-    }
-
-    /**
-     * Validate a provided token against the stored hash and expiry.
-     */
-    public function verifyResetToken(string $token): bool
-    {
-        if (!$this->resetTokenHash || !$this->resetTokenExpiresAt) {
-            return false;
-        }
-
-        // check expiry first
-        if ($this->resetTokenExpiresAt <= new DateTimeImmutable()) {
-            return false;
-        }
-
-        $givenHash = hash('sha256', $token);
-        return hash_equals($this->resetTokenHash, $givenHash);
-    }
-
-    
-
-    
-
-    public function setResetTokenExpiresAt(?\DateTimeImmutable $resetTokenExpiresAt): static
-    {
-        $this->resetTokenExpiresAt = $resetTokenExpiresAt;
-        return $this;
-    }
-
-    public function isResetTokenValid(): bool
-    {
-        if (!$this->resetToken || !$this->resetTokenExpiresAt) {
-            return false;
-        }
-        return $this->resetTokenExpiresAt > new \DateTimeImmutable();
-    }
-
-
 
     /**
      * @see UserInterface
      */
-    #[\Deprecated]
     public function eraseCredentials(): void
     {
         // If you store any temporary, sensitive data on the user, clear it here
         // $this->plainPassword = null;
     }
 
+    public function getGoogleId(): ?string
+    {
+        return $this->googleId;
+    }
 
-    
+    public function setGoogleId(?string $googleId): self
+    {
+        $this->googleId = $googleId;
+
+        return $this;
+    }
+
+    public function getName(): ?string
+    {
+        return $this->name;
+    }
+
+    public function setName(?string $name): self
+    {
+        $this->name = $name;
+
+        return $this;
+    }
+
+    public function getAvatarUrl(): ?string
+    {
+        return $this->avatarUrl;
+    }
+
+    public function setAvatarUrl(?string $avatarUrl): self
+    {
+        $this->avatarUrl = $avatarUrl;
+
+        return $this;
+    }
 }

@@ -8,6 +8,6 @@ class AgentPromptRequest
 {
     #[Assert\NotBlank]
     #[Assert\Type('string')]
-    #[Assert\Length(min: 10, max: 2000)] // Example length constraints
+    #[Assert\Length(min: 10, max: 20000)] // Example length constraints
     public ?string $prompt = null;
 }

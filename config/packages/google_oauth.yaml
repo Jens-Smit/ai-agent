@@ -1,0 +1,12 @@
+# config/packages/google_oauth.yaml
+knpu_oauth2_client:
+    clients:
+        google:
+            type: google
+            client_id: '%env(GOOGLE_CLIENT_ID)%'
+            client_secret: '%env(GOOGLE_CLIENT_SECRET)%'
+            redirect_route: connect_google_check # The name of the route that handles the callback
+            redirect_params: {}
+            access_type: offline
+            use_state: true
+            user_fields: ['email', 'name']

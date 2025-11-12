@@ -6,3 +6,9 @@ login:
     methods: [POST]
 api_refresh_token:
     path: /api/token/refresh
+connect_google:
+  path: /connect/google
+  controller: App\Controller\GoogleController::connect
+
+connect_google_check:
+  path: /connect/google/check
