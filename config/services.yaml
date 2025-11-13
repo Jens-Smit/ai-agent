@@ -25,18 +25,12 @@ services:
     App\Controller\:
         resource: '../src/Controller'
         tags: ['controller.service_arguments']
-
-    # PasswordService mit konfigurierbarer Frontend-URL
-    App\Service\PasswordService:
-        arguments:
-            $frontendUrl: '%env(FRONTEND_URL)%'
-    # GoogleClientService
-    App\Service\GoogleClientService:    
     # JWT Authenticator
     App\Security\JwtTokenAuthenticator:
         arguments:
             $jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
             $userProvider: '@security.user.provider.concrete.app_user_provider'
+    
     # Google Authenticator
     App\Security\GoogleAuthenticator:
         arguments:
@@ -47,9 +41,30 @@ services:
             #$refreshTokenManager: '@gesdinet.jwtrefreshtoken.refresh_token_manager'
         tags:
             - { name: 'monolog.logger', channel: 'security' }
+    # Google User Provider
     App\Security\GoogleUserProvider:
         autowire: true
         autoconfigure: true  
+    # Repositories
+    App\Repository\AgentStatusRepository: ~
+    App\Repository\KnowledgeDocumentRepository: ~
+
+        ### Services & Tools ###
+        ### Services ###
+
+    # AgentStatusService mit EntityManager
+    App\Service\AgentStatusService:
+        arguments:
+            $em: '@doctrine.orm.entity_manager'
+    # PasswordService mit konfigurierbarer Frontend-URL
+    App\Service\PasswordService:
+        arguments:
+            $frontendUrl: '%env(FRONTEND_URL)%'
+    # GoogleClientService
+    App\Service\GoogleClientService:  
+
+            ### Tools ###
+
     # CodeSaverTool
     App\Tool\CodeSaverTool:
         arguments:
@@ -64,13 +79,7 @@ services:
         public: false   
   
 
-    # KnowledgeIndexerTool
-    App\Tool\KnowledgeIndexerTool:
-        arguments:
-            $platform: '@ai.platform.gemini'  # Für Embeddings
-            $store: '@ai.store.memory.knowledge_base'
-            $logger: '@logger'
-        tags: ['ai.tool']
+ 
     # SandboxExecutorTool
     App\Tool\SandboxExecutorTool:
         arguments:
@@ -106,7 +115,24 @@ services:
             $projectRootDir: '%kernel.project_dir%'
         tags: ['ai.tool']
     
-    
+    # Updated KnowledgeIndexerTool mit MySQL Support
+    App\Tool\KnowledgeIndexerTool:
+        arguments:
+            $platform: '@ai.platform.gemini'
+            $em: '@doctrine.orm.entity_manager'
+            $knowledgeRepo: '@App\Repository\KnowledgeDocumentRepository'
+            $logger: '@logger'
+        tags:
+            - { name: 'ai.tool' }
+
+    # NEW: MySQL Knowledge Search Tool
+    App\Tool\MySQLKnowledgeSearchTool:
+        arguments:
+            $platform: '@ai.platform.gemini'
+            $knowledgeRepo: '@App\Repository\KnowledgeDocumentRepository'
+            $logger: '@logger'
+        tags:
+            - { name: 'ai.tool' }
                  
                      
             

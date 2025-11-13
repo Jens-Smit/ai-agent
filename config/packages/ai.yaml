@@ -15,10 +15,7 @@ ai:
         options:
           dimensions: 768
 
-  store:
-    memory:
-      knowledge_base:
-        strategy: 'cosine'
+  
 
   agent:
     file_generator:
@@ -36,6 +33,7 @@ ai:
         - 'App\Tool\DeployGeneratedCodeTool'
         - 'App\Tool\WebScraperTool'
         - 'App\Tool\ApiClientTool'
+        - 'App\Tool\MySQLKnowledgeSearchTool'
         
         
       fault_tolerant_toolbox: true
@@ -109,6 +107,7 @@ ai:
         - 'App\Tool\ApiClientTool'
         - 'App\Tool\ToolRequestor'
         - 'App\Tool\PdfGenerator'
+        - 'App\Tool\MySQLKnowledgeSearchTool'
         
                 
         
