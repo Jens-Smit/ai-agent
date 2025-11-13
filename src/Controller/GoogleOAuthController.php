@@ -1,64 +1,81 @@
 <?php
 
-declare(strict_types=1);
-
 namespace App\Controller;
 
 use KnpU\OAuth2ClientBundle\Client\ClientRegistry;
-use KnpU\OAuth2ClientBundle\Client\Provider\GoogleClient;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Routing\Attribute\Route;
-use Symfony\Component\Security\Http\Attribute\IsGranted;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
+use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
+use Gesdinet\JWTRefreshTokenBundle\Generator\RefreshTokenGeneratorInterface;
+use Gesdinet\JWTRefreshTokenBundle\Model\RefreshTokenManagerInterface;
+use Symfony\Component\HttpFoundation\Cookie;
+use App\Security\GoogleUserProvider;
 
 /**
- * Handles Google OAuth2 authentication flow.
+ * Handles Google OAuth2 authentication flow for React Frontend.
  */
 class GoogleOAuthController extends AbstractController
 {
-    // Die Router-Instanz wird hier zwar injiziert, aber im Controller nur für 
-    // manuelle Redirects benötigt.
     public function __construct(
         private readonly ClientRegistry $clientRegistry,
-        private readonly UrlGeneratorInterface $router
+        private readonly GoogleUserProvider $userProvider, 
+        private readonly UrlGeneratorInterface $router,
+        private readonly JWTTokenManagerInterface $jwtManager,
+        private readonly RefreshTokenGeneratorInterface $refreshTokenGenerator,
+        private readonly RefreshTokenManagerInterface $refreshTokenManager,
     ) {
     }
 
+    /**
+     * Initiates Google OAuth flow
+     */
     #[Route('/connect/google', name: 'google_oauth_start', methods: ['GET'])]
     public function connect(): RedirectResponse
     {
-        /** @var GoogleClient $client */
         $client = $this->clientRegistry->getClient('google');
-
-        // Fordert 'profile' und 'email' Scopes an
-        return $client->redirect(['profile', 'email']); 
+        return $client->redirect(['profile', 'email']);
     }
 
     /**
-     * DIESE METHODE MUSS LEER BLEIBEN.
-     * Der Request wird vollständig vom GoogleAuthenticator abgefangen und verarbeitet.
-     * Wenn der Request diesen Controller-Code erreicht, ist die Authentifizierung
-     * fehlerhaft oder es wurde kein Benutzer gefunden.
+     * Google OAuth Callback - Wird vom GoogleAuthenticator abgefangen
+     * Wenn dieser Code erreicht wird, ist die Auth fehlgeschlagen
      */
     #[Route('/connect/google/check', name: 'connect_google_check', methods: ['GET'])]
     public function connectCheck(): Response
     {
-        // Fallback: Wenn der Authenticator fehlschlägt, leiten wir zum Login um.
-        $this->addFlash('error', 'Google login failed: Please check your configuration.');
-        return $this->redirectToRoute('app_login'); 
+        // Dieser Code sollte NIE erreicht werden, da der Authenticator den Request abfängt
+        // Falls doch: Redirect zum Frontend mit Error
+        $frontendUrl = $_ENV['FRONTEND_URL'] ?? 'http://localhost:3000';
+        return new RedirectResponse($frontendUrl . '/login?error=oauth_failed');
     }
 
     /**
-     * Beispiel für eine geschützte Seite.
+     * Optional: API Endpoint um User-Daten nach OAuth zu holen
+     * Wird vom React Frontend nach dem Callback verwendet
      */
-    #[Route('/profile', name: 'app_profile', methods: ['GET'])]
-    #[IsGranted("IS_AUTHENTICATED_FULLY")]
-    public function profile(): Response
+    #[Route('/api/user', name: 'api_get_user', methods: ['GET'])]
+    public function getUserData(): JsonResponse
     {
-        return $this->render('google_oauth/profile.html.twig', [
-            'user' => $this->getUser(),
+        $user = $this->getUser();
+        
+        if (!$user) {
+            return new JsonResponse(['error' => 'Not authenticated'], 401);
+        }
+
+        return new JsonResponse([
+            'status' => 'success',
+            'user' => [
+                'id' => $user->getId(),
+                'email' => $user->getEmail(),
+                'name' => $user->getName(),
+                'googleId' => $user->getGoogleId(),
+                'avatarUrl' => $user->getAvatarUrl(),
+                'roles' => $user->getRoles(),
+            ]
         ]);
     }
 }

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Mein Profil</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f7f9fc; color: #333; margin: 0; padding: 40px; }
+        .container { max-width: 600px; margin: 0 auto; background: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+        h1 { color: #007bff; margin-bottom: 20px; font-weight: 300; }
+        .user-info p { margin: 10px 0; font-size: 1.1em; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        .user-info strong { display: inline-block; width: 120px; color: #555; }
+        .success-message { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; padding: 15px; border-radius: 8px; margin-bottom: 20px; text-align: center; }
+        .logout-link { display: inline-block; margin-top: 20px; padding: 10px 15px; background-color: #dc3545; color: white; text-decoration: none; border-radius: 6px; transition: background-color 0.3s; }
+        .logout-link:hover { background-color: #c82333; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="success-message">
+            Sie sind erfolgreich über Google eingeloggt!
+        </div>
+        <h1>Willkommen, {{ user.name|default(user.email) }}</h1>
+
+        <div class="user-info">
+            {% if user.googleId %}
+                <p><strong>Google ID:</strong> {{ user.googleId }}</p>
+            {% endif %}
+            <p><strong>E-Mail:</strong> {{ user.email }}</p>
+            <p><strong>Rollen:</strong> 
+                {% for role in user.roles %}
+                    <span style="background: #f0f0f0; padding: 3px 8px; border-radius: 4px; margin-right: 5px; font-size: 0.9em;">{{ role }}</span>
+                {% endfor %}
+            </p>
+        </div>
+        
+        {# Logout-Link muss zu Ihrer JWT-Logout-Route führen, z.B. /api/logout. Hier ist ein Dummy-Link. #}
+        <a href="/" class="logout-link">Zur Startseite</a>
+        <p style="margin-top: 20px; font-size: 0.9em; color: #777;">(Ein echter Logout-Endpunkt ist hier nicht definiert und würde API-Interaktion erfordern.)</p>
+    </div>
+</body>
+</html>

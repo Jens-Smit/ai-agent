@@ -108,6 +108,8 @@ ai:
         - 'App\Tool\WebScraperTool'
         - 'App\Tool\ApiClientTool'
         - 'App\Tool\ToolRequestor'
+        - 'App\Tool\PdfGenerator'
+        
                 
         
       fault_tolerant_toolbox: true

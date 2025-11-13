@@ -7,6 +7,8 @@ use OpenApi\Attributes as OA;
 use Symfony\AI\Agent\AgentInterface;
 use Symfony\AI\Platform\Message\Message;
 use Symfony\AI\Platform\Message\MessageBag;
+use Symfony\Contracts\HttpClient\Exception\ServerExceptionInterface;
+use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -14,7 +16,7 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Psr\Log\LoggerInterface;
-
+use App\Service\AgentStatusService;
 #[Route('/api', name: 'api_')]
 #[OA\Tag(name: 'AI Agent - Personal Assistant')]
 class PersonalAssistantController extends AbstractController
@@ -22,7 +24,9 @@ class PersonalAssistantController extends AbstractController
     private const SESSION_MESSAGE_BAG_KEY = 'ai_agent_personal_assistant_messages';
 
     public function __construct(
-        private LoggerInterface $logger
+        private LoggerInterface $logger,
+        private AgentStatusService $agentStatusService
+       
     ) {
     }
 
@@ -45,11 +49,7 @@ class PersonalAssistantController extends AbstractController
         #[Autowire(service: 'ai.agent.personal_assistent')]
         AgentInterface $agent,
     ): JsonResponse {
-        // ... (Der gesamte Inhalt Ihrer ursprünglichen PersonalAssistent-Methode,
-        // jedoch ohne die AgentStatusService- und Validator-Injektionen, die nur
-        // der DevAgentController benötigt.)
-        
-        // Konfiguration
+        // Konfiguration für die Retry-Logik
         $maxRetries = 5;
         $retryDelaySeconds = 60;
         
@@ -122,81 +122,76 @@ class PersonalAssistantController extends AbstractController
                     ],
                 ], Response::HTTP_OK);
 
-            } catch (\Symfony\Contracts\HttpClient\Exception\ServerExceptionInterface $e) {
-                // 503 Service Unavailable oder andere 5xx Fehler
-                $lastError = $e;
-                
-                $this->logger->warning('Server-Fehler beim Agent-Aufruf', [
-                    'attempt' => $attempt,
-                    'max_retries' => $maxRetries,
-                    'error' => $e->getMessage(),
-                    'status_code' => $e->getResponse()->getStatusCode() ?? 'unknown',
-                ]);
-
-                // Wenn es nicht der letzte Versuch ist, warte
-                if ($attempt < $maxRetries) {
-                    $this->logger->info('Warte vor erneutem Versuch', [
-                        'wait_seconds' => $retryDelaySeconds,
-                        'next_attempt' => $attempt + 1,
-                    ]);
-                    
-                    sleep($retryDelaySeconds);
-                    $attempt++;
-                    continue;
-                }
-
-                // Letzter Versuch fehlgeschlagen
-                break;
-
-            } catch (\Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface $e) {
-                // Netzwerk- oder Verbindungsfehler
-                $lastError = $e;
-                
-                $this->logger->warning('Transport-Fehler beim Agent-Aufruf', [
-                    'attempt' => $attempt,
-                    'max_retries' => $maxRetries,
-                    'error' => $e->getMessage(),
-                ]);
-
-                if ($attempt < $maxRetries) {
-                    sleep($retryDelaySeconds);
-                    $attempt++;
-                    continue;
-                }
-
-                break;
-
             } catch (\Throwable $e) {
-                // Alle anderen Fehler - kein Retry
                 $lastError = $e;
+                $errorMessage = $e->getMessage();
+                $isRetriable = false;
+
+                // 1. Prüfen auf standardmäßige retriable HTTP-Fehler (5xx)
+                if ($e instanceof ServerExceptionInterface) {
+                    $isRetriable = true;
+                }
+                // 2. Prüfen auf Transport-/Verbindungsfehler
+                else if ($e instanceof TransportExceptionInterface) {
+                    $isRetriable = true;
+                }
+                // 3. Prüfen auf den spezifischen, in der AI Platform gewrappten 503-Fehler
+                //    (Der Fehler, der in Ihrem Log einen 500-Exit verursacht hat)
+                else if (str_contains($errorMessage, '503') || str_contains($errorMessage, 'UNAVAILABLE') || str_contains($errorMessage, 'overloaded')) {
+                    $isRetriable = true;
+                }
                 
-                $this->logger->error('Unerwarteter Fehler beim Agent-Aufruf', [
+                if ($isRetriable) {
+                    $this->logger->warning('Retriable Fehler beim Agent-Aufruf erkannt', [
+                        'attempt' => $attempt,
+                        'error_type' => $e::class,
+                        'message' => $errorMessage,
+                        'status_code' => ($e instanceof ServerExceptionInterface) ? $e->getResponse()->getStatusCode() : 'unknown',
+                    ]);
+
+                    // Wenn es nicht der letzte Versuch ist, warte und versuche es erneut
+                    if ($attempt < $maxRetries) {
+                         $this->logger->warning(sprintf('Retrying AI agent call in %d seconds...', $retryDelaySeconds));
+                        $this->agentStatusService->addStatus(sprintf('Warte %d Sekunden vor erneutem Versuch...', $retryDelaySeconds));   
+                        sleep($retryDelaySeconds); // 60 Sekunden warten
+                        $attempt++;
+                        continue;
+                    }
+
+                    // Letzter Versuch fehlgeschlagen
+                    break;
+                }
+
+                // Nicht retriable Fehler (z.B. 4xx oder echter unerwarteter Fehler)
+                $this->logger->error('Unerwarteter Fehler beim Agent-Aufruf (Kein Retry)', [
                     'attempt' => $attempt,
-                    'error' => $e->getMessage(),
+                    'error_type' => $e::class,
+                    'error' => $errorMessage,
                     'trace' => $e->getTraceAsString(),
                 ]);
 
+                // Gebe den nicht retriable Fehler sofort als HTTP 500 zurück
                 return $this->json([
                     'status' => 'error',
-                    'message' => 'Ein unerwarteter Fehler ist aufgetreten',
-                    'error' => $e->getMessage(),
+                    'message' => 'Ein unerwarteter, nicht behebbarer Fehler ist aufgetreten',
+                    'error' => $errorMessage,
                     'attempts' => $attempt,
                 ], Response::HTTP_INTERNAL_SERVER_ERROR);
             }
         }
 
-        // Alle Versuche fehlgeschlagen
+        // Alle Versuche fehlgeschlagen (es war ein retriable Fehler)
         $this->logger->error('Alle Agent-Aufrufe fehlgeschlagen', [
-            'total_attempts' => $attempt,
+            'total_attempts' => $maxRetries,
             'last_error' => $lastError?->getMessage(),
         ]);
 
+        // Rückgabe des 503 Service Unavailable nach maximalen Retries
         return $this->json([
             'status' => 'error',
             'message' => 'Der Service ist momentan nicht verfügbar. Bitte versuchen Sie es später erneut.',
             'error' => $lastError?->getMessage() ?? 'Unbekannter Fehler',
-            'attempts' => $attempt,
-            'max_retries' => $maxRetries,
+            'attempts' => $maxRetries,
         ], Response::HTTP_SERVICE_UNAVAILABLE);
     }
 

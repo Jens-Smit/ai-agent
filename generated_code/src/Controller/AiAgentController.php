@@ -20,13 +20,15 @@ use Symfony\AI\Agent\AgentInterface;
 use Symfony\Component\Validator\Validator\ValidatorInterface;
 use Symfony\AI\Platform\Message\MessageBag;
 use Symfony\AI\Platform\Message\Message;
+use App\Service\AiAgentRetryExecutor; // Import the new service
 
 class AiAgentController extends AbstractController
 {
     public function __construct(
         private LoggerInterface $logger,
         private AgentStatusService $agentStatusService,
-        private ValidatorInterface $validator
+        private ValidatorInterface $validator,
+        private AiAgentRetryExecutor $aiAgentRetryExecutor // Inject the new service
     ) {}
 
     #[Route('/api/devAgent', name: 'api_devAgent_v2', methods: ['POST'])]
@@ -85,7 +87,8 @@ class AiAgentController extends AbstractController
                         new OA\Property(property: 'ai_response', type: 'string'),
                         new OA\Property(property: 'files_created', type: 'array', items: new OA\Items(type: 'string'), nullable: true),
                         new OA\Property(property: 'deployment_instructions', type: 'string', nullable: true),
-                        new OA\Property(property: 'statuses', type: 'array', items: new OA\Items(type: 'object'))
+                        new OA\Property(property: 'statuses', type: 'array', items: new OA\Items(type: 'object')),
+                        new OA\Property(property: 'is_final', type: 'boolean', example: true)
                     ]
                 )
             ),
@@ -96,7 +99,8 @@ class AiAgentController extends AbstractController
                     properties: [
                         new OA\Property(property: 'error', type: 'string'),
                         new OA\Property(property: 'violations', type: 'array', items: new OA\Items(type: 'string'), nullable: true),
-                        new OA\Property(property: 'statuses', type: 'array', items: new OA\Items(type: 'object'))
+                        new OA\Property(property: 'statuses', type: 'array', items: new OA\Items(type: 'object')),
+                        new OA\Property(property: 'is_final', type: 'boolean', example: true)
                     ]
                 )
             ),
@@ -107,7 +111,8 @@ class AiAgentController extends AbstractController
                     properties: [
                         new OA\Property(property: 'error', type: 'string'),
                         new OA\Property(property: 'details', type: 'string', nullable: true),
-                        new OA\Property(property: 'statuses', type: 'array', items: new OA\Items(type: 'object'))
+                        new OA\Property(property: 'statuses', type: 'array', items: new OA\Items(type: 'object')),
+                        new OA\Property(property: 'is_final', type: 'boolean', example: true)
                     ]
                 )
             ),
@@ -119,7 +124,8 @@ class AiAgentController extends AbstractController
                         new OA\Property(property: 'status', type: 'string'),
                         new OA\Property(property: 'message', type: 'string'),
                         new OA\Property(property: 'raw_result', type: 'object', nullable: true),
-                        new OA\Property(property: 'statuses', type: 'array', items: new OA\Items(type: 'object'))
+                        new OA\Property(property: 'statuses', type: 'array', items: new OA\Items(type: 'object')),
+                        new OA\Property(property: 'is_final', type: 'boolean', example: true)
                     ]
                 )
             )
@@ -152,71 +158,25 @@ class AiAgentController extends AbstractController
             return $this->json([
                 'error' => 'Invalid prompt provided.',
                 'violations' => $errors,
-                'statuses' => $this->agentStatusService->getStatuses()
+                'statuses' => $this->agentStatusService->getStatuses(),
+                'is_final' => true
             ], 400);
         }
 
         $userPrompt = $agentPromptRequest->prompt;
-
-        $maxRetries = 25;
-        $retryDelay = 60; // seconds
-        $lastException = null;
         $result = null;
-
-        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            try {
-                $this->logger->info(sprintf('Starting AI agent call (Attempt %d/%d)', $attempt, $maxRetries), ['prompt' => $userPrompt]);
-                $this->agentStatusService->addStatus(sprintf('Prompt an AI-Agent gesendet (Versuch %d/%d).', $attempt, $maxRetries));
-
-                $messages = new MessageBag(
-                    Message::ofUser($userPrompt)
-                );
-
-                $result = $agent->call($messages);
-                $this->agentStatusService->addStatus('Antwort vom AI-Agent erhalten.');
-                $this->logger->info('AI agent call successful.', ['attempt' => $attempt]);
-                break; // Exit loop on success
-            } catch (ServerException $e) { // Catch specific API errors if possible
-                $lastException = $e;
-                $this->logger->error(sprintf('AI agent call failed (Attempt %d/%d): %s', $attempt, $maxRetries, $e->getMessage()), [
-                    'exception' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                    'attempt' => $attempt
-                ]);
-                $this->agentStatusService->addStatus(sprintf('Fehler beim AI-Agent-Aufruf (Versuch %d/%d): %s', $attempt, $maxRetries, $e->getMessage()));
-
-                if ($attempt < $maxRetries) {
-                    $this->logger->warning(sprintf('Retrying AI agent call in %d seconds...', $retryDelay));
-                    $this->agentStatusService->addStatus(sprintf('Warte %d Sekunden vor erneutem Versuch...', $retryDelay));
-                     // exponential backoff
-                    sleep($retryDelay);
-                }
-            } catch (\Throwable $e) { // Catch all throwables (Error and Exception)
-                $lastException = $e;
-                $this->logger->error(sprintf('An unexpected error (Throwable) occurred during AI agent call (Attempt %d/%d): %s', $attempt, $maxRetries, $e->getMessage()), [
-                    'exception_class' => get_class($e), // Log the actual class of the exception
-                    'exception_message' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                    'attempt' => $attempt
-                ]);
-                $this->agentStatusService->addStatus(sprintf('Unerwarteter Fehler beim AI-Agent-Aufruf (Versuch %d/%d): %s', $attempt, $maxRetries, $e->getMessage()));
-                if ($attempt < $maxRetries) {
-                    $this->logger->warning(sprintf('Retrying AI agent call in %d seconds...', $retryDelay));
-                    $this->agentStatusService->addStatus(sprintf('Warte %d Sekunden vor erneutem Versuch...', $retryDelay));
-                    sleep($retryDelay);
-                    
-                }
-            }
-        }
-
-        if ($result === null) {
-            $this->logger->critical('All AI agent call attempts failed after retries.', ['last_exception' => $lastException ? $lastException->getMessage() : 'N/A']);
-            $this->agentStatusService->addStatus('Kritischer Fehler: AI-Agent nach mehreren Versuchen nicht verfügbar.');
+        
+        try {
+            $messages = new MessageBag(Message::ofUser($userPrompt));
+            $result = $this->aiAgentRetryExecutor->execute($agent, $messages, 'Frontend DevAgent'); // Use the new service
+        } catch (\RuntimeException $e) {
+            $this->logger->critical('All AI agent call attempts failed after retries.', ['last_exception' => $e->getMessage()]);
             return $this->json([
                 'error' => 'AI Agent is currently unavailable after multiple retries. Please try again later.',
-                'details' => $lastException ? $lastException->getMessage() : 'No specific error message available.',
-                'statuses' => $this->agentStatusService->getStatuses()
-            ], 503); // Service Unavailable
+                'details' => $e->getMessage(),
+                'statuses' => $this->agentStatusService->getStatuses(),
+                'is_final' => true
+            ], 503);
         }
 
         try {
@@ -245,7 +205,8 @@ class AiAgentController extends AbstractController
                     'status' => 'no_content',
                     'message' => 'Agent returned no textual content. See server logs (raw_result) for payload snapshot.',
                     'raw_result' => $raw,
-                    'statuses' => $this->agentStatusService->getStatuses()
+                    'statuses' => $this->agentStatusService->getStatuses(),
+                    'is_final' => true
                 ], 502);
             }
 
@@ -299,7 +260,8 @@ class AiAgentController extends AbstractController
                     'ai_response' => $aiContent,
                     'files_created' => $recentFiles,
                     'deployment_instructions' => $deploymentResult,
-                    'statuses' => $this->agentStatusService->getStatuses()
+                    'statuses' => $this->agentStatusService->getStatuses(),
+                    'is_final' => true // Füge diese Zeile hinzu
                 ]);
 
             }
@@ -311,7 +273,8 @@ class AiAgentController extends AbstractController
                 'message' => 'Agent completed execution.',
                 'ai_response' => $aiContent,
                 'hint' => 'Check if the agent decided to create a file or just provide information.',
-                'statuses' => $this->agentStatusService->getStatuses()
+                'statuses' => $this->agentStatusService->getStatuses(),
+                'is_final' => true // Füge diese Zeile hinzu
             ]);
 
         } catch (\Exception $e) {
@@ -324,7 +287,8 @@ class AiAgentController extends AbstractController
             return $this->json([
                 'error' => 'Agent execution failed during post-processing or deployment.',
                 'details' => $e->getMessage(),
-                'statuses' => $this->agentStatusService->getStatuses()
+                'statuses' => $this->agentStatusService->getStatuses(),
+                'is_final' => true // Auch für Fehlerfälle als final kennzeichnen
             ], 500);
         }
     }

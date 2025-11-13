@@ -23,9 +23,18 @@ security:
             provider: app_user_provider
             refresh_jwt:
                 check_path: /api/token/refresh
-                
+        # 3. NEUE FIREWALL: Behandelt Google OAuth und Web-Flows        
+        oauth_flow:
+            # WICHTIG: Füge /connect/google/check hinzu, damit der Authenticator greift
+            pattern: ^/connect/google|^/connect/google/check|^/profile 
+            stateless: false # WICHTIG: OAuth-Flow ist STATEFUL (Session/Cookies)
+            provider: app_google_user_provider 
+            
+            custom_authenticators:
+                - App\Security\GoogleAuthenticator # Fängt den Callback ab
         
-        # 3. Haupt-API Firewall
+        
+        # 4. Haupt-API Firewall
         api:
             pattern: ^/api
             stateless: true
@@ -63,9 +72,11 @@ security:
 
         # Health-Check (falls vorhanden)
         - { path: ^/health$, roles: PUBLIC_ACCESS }
+
+
         - { path: ^/connect/google, roles: PUBLIC_ACCESS }
         - { path: ^/connect/google/check, roles: PUBLIC_ACCESS }
-        - { path: ^/profile, roles: PUBLIC_ACCESS }
+        - { path: ^/profile, roles: IS_AUTHENTICATED_FULLY }
         # ========================================
         # GESCHÜTZTE ROUTEN (Authentifizierung erforderlich)
         # ========================================

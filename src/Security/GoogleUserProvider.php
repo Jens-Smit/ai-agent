@@ -57,26 +57,17 @@ class GoogleUserProvider extends OAuthUserProvider
                 $user = new User();
                 $user->setEmail($googleUser->getEmail());
                 $user->setRoles(['ROLE_USER']);
-                // Set additional fields from Google profile
+                // Set additional fields from Google profile (setzen Sie nur Felder, die in Ihrer User-Entity existieren)
                 $user->setName($googleUser->getName());
-                $user->setAvatarUrl($googleUser->getAvatar());
-                // A password is not required as authentication is via Google.
-                // You could set a random password here if you have a mixed strategy.
-                // $user->setPassword('');
             }
             // Link the (new or existing) user with the Google ID
             $user->setGoogleId($googleUser->getId());
             $this->entityManager->persist($user);
             $this->entityManager->flush();
         } else {
-            // Update existing user data if needed (e.g., name, avatar)
+            // Update existing user data if needed (e.g., name)
             if ($user->getName() !== $googleUser->getName()) {
                 $user->setName($googleUser->getName());
-                $this->entityManager->persist($user);
-                $this->entityManager->flush();
-            }
-            if ($user->getAvatarUrl() !== $googleUser->getAvatar()) {
-                $user->setAvatarUrl($googleUser->getAvatar());
                 $this->entityManager->persist($user);
                 $this->entityManager->flush();
             }

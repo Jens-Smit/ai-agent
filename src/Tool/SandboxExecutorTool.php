@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Tool;
 
 use Symfony\AI\Agent\Toolbox\Attribute\AsTool;
@@ -7,129 +8,163 @@ use Symfony\Component\HttpKernel\KernelInterface;
 use Symfony\Component\Process\Process;
 use Symfony\Component\Filesystem\Filesystem;
 use Psr\Log\LoggerInterface;
+use App\Service\AgentStatusService;
 
 #[AsTool(
     name: 'run_code_in_sandbox',
-    description: 'Executes a PHP file in a secure Docker sandbox with a complete copy of the production system. Tests all code changes including config modifications before deployment.'
+    description: 'Executes code in a complete isolated project clone. Creates full project copy in generated_code/Project, runs tests in Docker sandbox, and generates structured update packages with all changes and documentation.'
 )]
 final class SandboxExecutorTool
 {
     private string $projectDir;
     private Filesystem $filesystem;
     private LoggerInterface $logger;
+    private AgentStatusService $statusService;
+    
     private const GENERATED_CODE_DIR = '/generated_code/';
-    private const DOCKERFILE_SANDBOX_NAME = 'Dockerfile.sandbox';
+    private const PROJECT_CLONE_DIR = '/generated_code/Project/';
     private const DOCKER_IMAGE_NAME = 'ai-sandbox:latest';
     
-    // Verzeichnisse die NICHT in die Sandbox kopiert werden
+    // Verzeichnisse die NICHT kopiert werden
     private const EXCLUDED_DIRS = [
         'var/cache',
         'var/log',
         'vendor',
         'node_modules',
         '.git',
-        'public/uploads'
+        'public/uploads',
+        'generated_code' // Wichtig: Verhindert rekursive Kopien
     ];
 
-    public function __construct(KernelInterface $kernel, LoggerInterface $logger)
-    {
+    public function __construct(
+        KernelInterface $kernel,
+        LoggerInterface $logger,
+        AgentStatusService $statusService
+    ) {
         $this->projectDir = $kernel->getProjectDir();
         $this->filesystem = new Filesystem();
         $this->logger = $logger;
+        $this->statusService = $statusService;
     }
 
     /**
-     * Führt PHP-Code in einer vollständigen Sandbox-Kopie des Produktionssystems aus
+     * Führt Code in vollständiger Projekt-Sandbox aus und erstellt Update-Paket
      *
-     * @param string $filename Der PHP-Dateiname aus generated_code/ (z.B. "MyTestScript.php")
-     * @param bool $includeDatabase Ob eine Datenbank-Kopie erstellt werden soll (default: false)
-     * @return string Ausführungsergebnis mit Details
+     * @param string $filename PHP-Dateiname aus generated_code/
+     * @param string $updatePackageName Name für das Update-Paket (z.B. "GoogleCalendar")
+     * @param bool $includeDatabase Datenbank-Kopie erstellen
+     * @return string Detailliertes Ausführungsergebnis
      */
     public function __invoke(
         #[With(pattern: '/^[^\\\\/]+\\.php$/i')]
         string $filename,
+        string $updatePackageName = 'UpdatePackage',
         bool $includeDatabase = false
     ): string {
+        $this->statusService->addStatus('🚀 Sandbox-Ausführung gestartet');
+        
         $fullGeneratedCodePath = $this->projectDir . self::GENERATED_CODE_DIR;
         $filePathToExecute = $fullGeneratedCodePath . basename($filename);
 
         if (!$this->filesystem->exists($filePathToExecute)) {
-            $this->logger->error(sprintf('File not found: %s', $filePathToExecute));
+            $this->statusService->addStatus('❌ Datei nicht gefunden');
             return sprintf('ERROR: File "%s" not found in generated_code directory.', $filename);
         }
 
-        // 1. Erstelle temporäres Sandbox-Verzeichnis mit vollständiger Projektkopie
-        $sandboxDir = $this->createSandboxEnvironment();
-        
         try {
-            // 2. Docker Image bauen
-            $this->buildDockerImage($sandboxDir);
+            // 1. Erstelle vollständigen Projekt-Clone
+            $this->statusService->addStatus('📁 Erstelle vollständige Projektkopie...');
+            $projectCloneDir = $this->createProjectClone();
             
-            // 3. Optionale Datenbank-Kopie erstellen
+            // 2. Kopiere generierten Code in Clone
+            $this->statusService->addStatus('📋 Kopiere generierten Code...');
+            $this->copyGeneratedCodeToClone($projectCloneDir);
+            
+            // 3. Docker Image bauen
+            $this->statusService->addStatus('🐳 Baue Docker-Image...');
+            $this->buildDockerImage($projectCloneDir);
+            
+            // 4. Optional: Datenbank-Setup
             if ($includeDatabase) {
-                $this->prepareDatabaseCopy($sandboxDir);
+                $this->statusService->addStatus('🗄️ Bereite Datenbank vor...');
+                $this->prepareDatabaseCopy($projectCloneDir);
             }
             
-            // 4. Code in Sandbox ausführen
-            $executionResult = $this->executeInSandbox($sandboxDir, $filename);
+            // 5. Code in Sandbox ausführen
+            $this->statusService->addStatus('⚙️ Führe Code in Sandbox aus...');
+            $executionResult = $this->executeInSandbox($projectCloneDir, $filename);
             
-            // 5. Analyse der Änderungen
-            $changes = $this->analyzeChanges($sandboxDir);
+            // 6. Änderungen analysieren
+            $this->statusService->addStatus('🔍 Analysiere Änderungen...');
+            $changes = $this->analyzeChanges($projectCloneDir);
             
-            return $this->formatResult($executionResult, $changes, $filename);
+            // 7. Update-Paket erstellen
+            $this->statusService->addStatus('📦 Erstelle Update-Paket...');
+            $updatePackagePath = $this->createUpdatePackage(
+                $projectCloneDir,
+                $updatePackageName,
+                $changes,
+                $executionResult
+            );
+            
+            $this->statusService->addStatus('✅ Sandbox-Ausführung erfolgreich abgeschlossen');
+            
+            return $this->formatResult(
+                $executionResult,
+                $changes,
+                $filename,
+                $updatePackagePath
+            );
             
         } catch (\Exception $e) {
+            $this->statusService->addStatus('❌ Fehler: ' . $e->getMessage());
             $this->logger->error('Sandbox execution failed', [
                 'exception' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
             return sprintf('ERROR: Sandbox execution failed: %s', $e->getMessage());
-        } finally {
-            // 6. Cleanup
-            if ($this->filesystem->exists($sandboxDir)) {
-                $this->filesystem->remove($sandboxDir);
-                $this->logger->info('Cleaned up sandbox directory', ['dir' => $sandboxDir]);
-            }
         }
     }
 
     /**
-     * Erstellt eine vollständige Kopie des Projekts für die Sandbox
+     * Erstellt vollständige Projektkopie in generated_code/Project/
      */
-    private function createSandboxEnvironment(): string
+    private function createProjectClone(): string
     {
-        $sandboxDir = sys_get_temp_dir() . '/ai_sandbox_' . uniqid();
-        $this->filesystem->mkdir($sandboxDir);
+        $cloneDir = $this->projectDir . self::PROJECT_CLONE_DIR;
         
-        $this->logger->info('Creating sandbox environment', ['dir' => $sandboxDir]);
+        // Entferne alte Clone falls vorhanden
+        if ($this->filesystem->exists($cloneDir)) {
+            $this->filesystem->remove($cloneDir);
+        }
+        
+        $this->filesystem->mkdir($cloneDir);
+        $this->logger->info('Creating project clone', ['dir' => $cloneDir]);
 
-        // Kopiere alle relevanten Projektdateien
-        $this->copyProjectFiles($sandboxDir);
-        
-        // Kopiere generierten Code
-        $this->copyGeneratedCode($sandboxDir);
+        // Kopiere alle Projektdateien
+        $this->copyProjectFiles($this->projectDir, $cloneDir);
         
         // Erstelle .env für Sandbox
-        $this->createSandboxEnv($sandboxDir);
+        $this->createSandboxEnv($cloneDir);
         
         // Kopiere Dockerfile
-        $this->copyDockerfile($sandboxDir);
+        $this->copyDockerfile($cloneDir);
         
-        return $sandboxDir;
+        return $cloneDir;
     }
 
     /**
-     * Kopiert Projektdateien intelligent (ohne excluded dirs)
+     * Kopiert Projektdateien intelligent
      */
-    private function copyProjectFiles(string $targetDir): void
+    private function copyProjectFiles(string $sourceDir, string $targetDir): void
     {
         $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($this->projectDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+            new \RecursiveDirectoryIterator($sourceDir, \RecursiveDirectoryIterator::SKIP_DOTS),
             \RecursiveIteratorIterator::SELF_FIRST
         );
 
         foreach ($iterator as $item) {
-            $relativePath = substr($item->getPathname(), strlen($this->projectDir) + 1);
+            $relativePath = substr($item->getPathname(), strlen($sourceDir) + 1);
             
             // Skip excluded directories
             if ($this->shouldExclude($relativePath)) {
@@ -145,11 +180,11 @@ final class SandboxExecutorTool
             }
         }
         
-        $this->logger->info('Project files copied to sandbox');
+        $this->logger->info('Project files copied to clone');
     }
 
     /**
-     * Prüft ob ein Pfad ausgeschlossen werden soll
+     * Prüft ob Pfad ausgeschlossen werden soll
      */
     private function shouldExclude(string $path): bool
     {
@@ -162,21 +197,33 @@ final class SandboxExecutorTool
     }
 
     /**
-     * Kopiert generierten Code in die Sandbox
+     * Kopiert generierten Code in Clone
      */
-    private function copyGeneratedCode(string $targetDir): void
+    private function copyGeneratedCodeToClone(string $cloneDir): void
     {
         $sourceDir = $this->projectDir . self::GENERATED_CODE_DIR;
-        $targetCodeDir = $targetDir . self::GENERATED_CODE_DIR;
+        $targetCodeDir = $cloneDir . self::GENERATED_CODE_DIR;
         
         if ($this->filesystem->exists($sourceDir)) {
-            $this->filesystem->mirror($sourceDir, $targetCodeDir);
-            $this->logger->info('Generated code copied to sandbox');
+            $this->filesystem->mkdir($targetCodeDir);
+            
+            // Kopiere nur neue PHP-Dateien, nicht Project/ oder alte Pakete
+            $files = new \DirectoryIterator($sourceDir);
+            foreach ($files as $file) {
+                if ($file->isFile() && $file->getExtension() === 'php') {
+                    $this->filesystem->copy(
+                        $file->getPathname(),
+                        $targetCodeDir . '/' . $file->getFilename()
+                    );
+                }
+            }
+            
+            $this->logger->info('Generated code copied to clone');
         }
     }
 
     /**
-     * Erstellt .env.sandbox für isolierte Testumgebung
+     * Erstellt .env.sandbox
      */
     private function createSandboxEnv(string $targetDir): void
     {
@@ -186,38 +233,37 @@ APP_DEBUG=1
 DATABASE_URL="mysql://root:root@sandbox_db:3306/sandbox_test?serverVersion=8.0"
 MAILER_DSN=null://null
 CORS_ALLOW_ORIGIN=*
+GEMINI_API_KEY=test_key
+OPENAI_API_KEY=test_key
+CLAUD_API_KEY=test_key
 ENV;
 
         $this->filesystem->dumpFile($targetDir . '/.env.sandbox', $envContent);
-        $this->logger->info('.env.sandbox created');
     }
 
     /**
-     * Kopiert und passt Dockerfile an
+     * Kopiert Dockerfile
      */
     private function copyDockerfile(string $targetDir): void
     {
-        $dockerfileSource = $this->projectDir . '/' . self::DOCKERFILE_SANDBOX_NAME;
-        $dockerfileDest = $targetDir . '/' . self::DOCKERFILE_SANDBOX_NAME;
+        $dockerfileSource = $this->projectDir . '/Dockerfile.sandbox';
+        $dockerfileDest = $targetDir . '/Dockerfile.sandbox';
         
         if (!$this->filesystem->exists($dockerfileSource)) {
             throw new \RuntimeException('Dockerfile.sandbox not found');
         }
         
         $this->filesystem->copy($dockerfileSource, $dockerfileDest);
-        $this->logger->info('Dockerfile copied');
     }
 
     /**
      * Baut Docker Image
      */
-    private function buildDockerImage(string $sandboxDir): void
+    private function buildDockerImage(string $cloneDir): void
     {
-        $this->logger->info('Building Docker image');
-        
         $buildProcess = new Process(
-            ['docker', 'build', '-t', self::DOCKER_IMAGE_NAME, '-f', self::DOCKERFILE_SANDBOX_NAME, '.'],
-            $sandboxDir,
+            ['docker', 'build', '-t', self::DOCKER_IMAGE_NAME, '-f', 'Dockerfile.sandbox', '.'],
+            $cloneDir,
             null,
             null,
             300
@@ -228,16 +274,13 @@ ENV;
         if (!$buildProcess->isSuccessful()) {
             throw new \RuntimeException('Docker build failed: ' . $buildProcess->getErrorOutput());
         }
-        
-        $this->logger->info('Docker image built successfully');
     }
 
     /**
-     * Bereitet Datenbank-Kopie vor (optional)
+     * Bereitet Datenbank-Kopie vor
      */
-    private function prepareDatabaseCopy(string $sandboxDir): void
+    private function prepareDatabaseCopy(string $cloneDir): void
     {
-        // Erstelle docker-compose.yml für DB-Container
         $composeContent = <<<YAML
 version: '3.8'
 services:
@@ -246,34 +289,22 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: sandbox_test
-    volumes:
-      - ./db_dump:/docker-entrypoint-initdb.d
     ports:
       - "33060:3306"
 YAML;
 
-        $this->filesystem->dumpFile($sandboxDir . '/docker-compose.yml', $composeContent);
-        
-        // Erstelle DB-Dump (vereinfacht)
-        $dumpDir = $sandboxDir . '/db_dump';
-        $this->filesystem->mkdir($dumpDir);
-        
-        // Hier würde ein echter DB-Dump erstellt werden
-        $this->logger->info('Database copy prepared');
+        $this->filesystem->dumpFile($cloneDir . '/docker-compose.yml', $composeContent);
     }
 
     /**
-     * Führt Code im Sandbox-Container aus
+     * Führt Code in Sandbox aus
      */
-    private function executeInSandbox(string $sandboxDir, string $filename): array
+    private function executeInSandbox(string $cloneDir, string $filename): array
     {
-        $this->logger->info('Executing PHP script in sandbox', ['file' => $filename]);
-        
-        // Container starten und Code ausführen
         $executeProcess = new Process(
             [
                 'docker', 'run', '--rm',
-                '-v', $sandboxDir . ':/app',
+                '-v', $cloneDir . ':/app',
                 '-w', '/app',
                 '--env-file', '/app/.env.sandbox',
                 self::DOCKER_IMAGE_NAME,
@@ -296,9 +327,9 @@ YAML;
     }
 
     /**
-     * Analysiert Änderungen nach der Ausführung
+     * Analysiert Änderungen nach Ausführung
      */
-    private function analyzeChanges(string $sandboxDir): array
+    private function analyzeChanges(string $cloneDir): array
     {
         $changes = [
             'modified_files' => [],
@@ -307,8 +338,8 @@ YAML;
             'dependencies_changed' => false
         ];
         
-        // Prüfe auf neue/geänderte Dateien
-        $generatedDir = $sandboxDir . self::GENERATED_CODE_DIR;
+        // Suche nach neuen/geänderten Dateien
+        $generatedDir = $cloneDir . self::GENERATED_CODE_DIR;
         if ($this->filesystem->exists($generatedDir)) {
             $finder = new \RecursiveIteratorIterator(
                 new \RecursiveDirectoryIterator($generatedDir, \RecursiveDirectoryIterator::SKIP_DOTS)
@@ -316,25 +347,25 @@ YAML;
             
             foreach ($finder as $file) {
                 if ($file->isFile()) {
-                    $relativePath = substr($file->getPathname(), strlen($sandboxDir) + 1);
+                    $relativePath = substr($file->getPathname(), strlen($cloneDir) + 1);
                     $changes['new_files'][] = $relativePath;
                 }
             }
         }
         
         // Prüfe Config-Änderungen
-        $configDir = $sandboxDir . '/config';
+        $configDir = $cloneDir . '/config';
         if ($this->filesystem->exists($configDir)) {
-            $changes['config_changes'] = $this->detectConfigChanges($configDir);
+            $changes['config_changes'] = $this->detectConfigChanges($cloneDir, $configDir);
         }
         
-        // Prüfe composer.json Änderungen
-        $composerFile = $sandboxDir . '/composer.json';
+        // Prüfe composer.json
+        $composerFile = $cloneDir . '/composer.json';
         if ($this->filesystem->exists($composerFile)) {
             $originalComposer = file_get_contents($this->projectDir . '/composer.json');
-            $sandboxComposer = file_get_contents($composerFile);
+            $cloneComposer = file_get_contents($composerFile);
             
-            if ($originalComposer !== $sandboxComposer) {
+            if ($originalComposer !== $cloneComposer) {
                 $changes['dependencies_changed'] = true;
             }
         }
@@ -345,7 +376,7 @@ YAML;
     /**
      * Erkennt Config-Änderungen
      */
-    private function detectConfigChanges(string $configDir): array
+    private function detectConfigChanges(string $cloneDir, string $configDir): array
     {
         $configChanges = [];
         
@@ -365,8 +396,7 @@ YAML;
                     if ($original !== $modified) {
                         $configChanges[] = [
                             'file' => $relativePath,
-                            'type' => 'modified',
-                            'diff' => $this->createDiff($original, $modified)
+                            'type' => 'modified'
                         ];
                     }
                 } else {
@@ -382,91 +412,145 @@ YAML;
     }
 
     /**
-     * Erstellt einfachen Diff
+     * Erstellt strukturiertes Update-Paket
      */
-    private function createDiff(string $original, string $modified): string
-    {
-        $originalLines = explode("\n", $original);
-        $modifiedLines = explode("\n", $modified);
+    private function createUpdatePackage(
+        string $cloneDir,
+        string $packageName,
+        array $changes,
+        array $executionResult
+    ): string {
+        $timestamp = (new \DateTime())->format('YmdHis');
+        $packageDir = $this->projectDir . self::GENERATED_CODE_DIR . 
+                      'updatepaket_' . preg_replace('/[^a-zA-Z0-9]/', '', $packageName) . '_' . $timestamp;
         
-        $diff = [];
-        $maxLines = max(count($originalLines), count($modifiedLines));
+        $this->filesystem->mkdir($packageDir);
         
-        for ($i = 0; $i < $maxLines; $i++) {
-            $origLine = $originalLines[$i] ?? '';
-            $modLine = $modifiedLines[$i] ?? '';
+        // Kopiere geänderte Dateien
+        foreach ($changes['new_files'] as $file) {
+            $source = $cloneDir . '/' . $file;
+            $target = $packageDir . '/' . $file;
             
-            if ($origLine !== $modLine) {
-                if (!empty($origLine)) {
-                    $diff[] = "- " . $origLine;
-                }
-                if (!empty($modLine)) {
-                    $diff[] = "+ " . $modLine;
-                }
+            if ($this->filesystem->exists($source)) {
+                $this->filesystem->mkdir(dirname($target));
+                $this->filesystem->copy($source, $target);
             }
         }
         
-        return implode("\n", array_slice($diff, 0, 20)); // Limit to 20 lines
+        // Erstelle README.md
+        $this->createPackageReadme($packageDir, $packageName, $changes, $executionResult);
+        
+        // Erstelle CHANGES.md
+        $this->createChangesLog($packageDir, $changes);
+        
+        $this->logger->info('Update package created', ['path' => $packageDir]);
+        
+        return $packageDir;
     }
 
     /**
-     * Formatiert Ergebnis für Rückgabe
+     * Erstellt README.md für Update-Paket
      */
-    private function formatResult(array $executionResult, array $changes, string $filename): string
-    {
-        $result = "=== SANDBOX EXECUTION REPORT ===\n\n";
+    private function createPackageReadme(
+        string $packageDir,
+        string $packageName,
+        array $changes,
+        array $executionResult
+    ): void {
+        $readme = "# Update-Paket: {$packageName}\n\n";
+        $readme .= "Erstellt: " . (new \DateTime())->format('Y-m-d H:i:s') . "\n\n";
         
-        // Execution Status
+        $readme .= "## Sandbox-Test-Ergebnis\n\n";
+        $readme .= "Status: " . ($executionResult['success'] ? '✅ Erfolgreich' : '❌ Fehlgeschlagen') . "\n";
+        $readme .= "Exit Code: {$executionResult['exit_code']}\n\n";
+        
+        if (!empty($executionResult['output'])) {
+            $readme .= "### Ausgabe\n```\n{$executionResult['output']}\n```\n\n";
+        }
+        
+        if (!empty($executionResult['error'])) {
+            $readme .= "### Fehler\n```\n{$executionResult['error']}\n```\n\n";
+        }
+        
+        $readme .= "## Änderungen\n\n";
+        $readme .= "### Neue Dateien (" . count($changes['new_files']) . ")\n";
+        foreach ($changes['new_files'] as $file) {
+            $readme .= "- `{$file}`\n";
+        }
+        $readme .= "\n";
+        
+        if (!empty($changes['config_changes'])) {
+            $readme .= "### Konfigurationsänderungen\n";
+            foreach ($changes['config_changes'] as $change) {
+                $readme .= "- [{$change['type']}] `{$change['file']}`\n";
+            }
+            $readme .= "\n";
+        }
+        
+        if ($changes['dependencies_changed']) {
+            $readme .= "⚠️ **Dependencies geändert**: composer.json wurde modifiziert\n\n";
+        }
+        
+        $readme .= "## Installation\n\n";
+        $readme .= "1. Überprüfen Sie alle Änderungen in CHANGES.md\n";
+        $readme .= "2. Kopieren Sie die Dateien an die entsprechenden Orte\n";
+        $readme .= "3. Falls Dependencies geändert: `composer install`\n";
+        $readme .= "4. Falls Config geändert: `php bin/console cache:clear`\n";
+        $readme .= "5. Tests ausführen: `php bin/phpunit`\n";
+        
+        $this->filesystem->dumpFile($packageDir . '/README.md', $readme);
+    }
+
+    /**
+     * Erstellt CHANGES.md
+     */
+    private function createChangesLog(string $packageDir, array $changes): void
+    {
+        $log = "# Änderungsprotokoll\n\n";
+        $log .= "## Dateien\n\n";
+        
+        foreach ($changes['new_files'] as $file) {
+            $log .= "### `{$file}`\n";
+            $log .= "Status: Neu\n\n";
+        }
+        
+        $this->filesystem->dumpFile($packageDir . '/CHANGES.md', $log);
+    }
+
+    /**
+     * Formatiert Ergebnis
+     */
+    private function formatResult(
+        array $executionResult,
+        array $changes,
+        string $filename,
+        string $updatePackagePath
+    ): string {
+        $result = "=== SANDBOX EXECUTION REPORT ===\n\n";
         $result .= "File: {$filename}\n";
-        $result .= "Status: " . ($executionResult['success'] ? "SUCCESS" : "FAILED") . "\n";
+        $result .= "Status: " . ($executionResult['success'] ? "✅ SUCCESS" : "❌ FAILED") . "\n";
         $result .= "Exit Code: {$executionResult['exit_code']}\n\n";
         
-        // Output
         if (!empty($executionResult['output'])) {
             $result .= "--- Output ---\n{$executionResult['output']}\n\n";
         }
         
-        // Errors
         if (!empty($executionResult['error'])) {
             $result .= "--- Errors ---\n{$executionResult['error']}\n\n";
         }
         
-        // Changes Detected
-        $result .= "=== CHANGES DETECTED ===\n\n";
+        $result .= "=== UPDATE PACKAGE ===\n\n";
+        $result .= "Location: {$updatePackagePath}\n";
+        $result .= "New Files: " . count($changes['new_files']) . "\n";
+        $result .= "Config Changes: " . count($changes['config_changes']) . "\n\n";
         
-        if (!empty($changes['new_files'])) {
-            $result .= "New Files:\n";
-            foreach ($changes['new_files'] as $file) {
-                $result .= "  + {$file}\n";
-            }
-            $result .= "\n";
-        }
-        
-        if (!empty($changes['config_changes'])) {
-            $result .= "Configuration Changes:\n";
-            foreach ($changes['config_changes'] as $change) {
-                $result .= "  {$change['type']}: {$change['file']}\n";
-                if (isset($change['diff'])) {
-                    $result .= "    Diff Preview:\n";
-                    foreach (explode("\n", $change['diff']) as $line) {
-                        $result .= "      {$line}\n";
-                    }
-                }
-            }
-            $result .= "\n";
-        }
-        
-        if ($changes['dependencies_changed']) {
-            $result .= "⚠️  Dependencies Changed: composer.json was modified\n\n";
-        }
-        
-        // Deployment Recommendation
         if ($executionResult['success']) {
-            $result .= "✅ Code executed successfully in sandbox.\n";
-            $result .= "📋 Review changes above and use deploy_generated_code tool to deploy.\n";
+            $result .= "✅ Code executed successfully in isolated sandbox.\n";
+            $result .= "📦 Update package ready at: {$updatePackagePath}\n";
+            $result .= "📖 Review README.md for installation instructions.\n";
         } else {
             $result .= "❌ Code execution failed in sandbox.\n";
-            $result .= "🔧 Fix errors before attempting deployment.\n";
+            $result .= "🔧 Review errors before deployment.\n";
         }
         
         return $result;

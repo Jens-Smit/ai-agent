@@ -30,7 +30,8 @@ services:
     App\Service\PasswordService:
         arguments:
             $frontendUrl: '%env(FRONTEND_URL)%'
-
+    # GoogleClientService
+    App\Service\GoogleClientService:    
     # JWT Authenticator
     App\Security\JwtTokenAuthenticator:
         arguments:
@@ -39,7 +40,16 @@ services:
     # Google Authenticator
     App\Security\GoogleAuthenticator:
         arguments:
-            $userProvider: '@security.user.provider.concrete.app_user_provider'
+            $clientRegistry: '@knpu.oauth2.registry'
+            $userProvider: '@App\Security\GoogleUserProvider'
+            #$jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
+            #$refreshTokenGenerator: '@gesdinet.jwtrefreshtoken.refresh_token_generator'
+            #$refreshTokenManager: '@gesdinet.jwtrefreshtoken.refresh_token_manager'
+        tags:
+            - { name: 'monolog.logger', channel: 'security' }
+    App\Security\GoogleUserProvider:
+        autowire: true
+        autoconfigure: true  
     # CodeSaverTool
     App\Tool\CodeSaverTool:
         arguments:
@@ -89,6 +99,13 @@ services:
             $logger: '@logger'
         tags: 
             - { name: 'ai.tool' }
+   
+    App\Tool\PdfGenerator:
+        arguments:
+            $logger: '@logger'
+            $projectRootDir: '%kernel.project_dir%'
+        tags: ['ai.tool']
+    
     
                  
                      
