@@ -62,7 +62,27 @@ services:
             $frontendUrl: '%env(FRONTEND_URL)%'
     # GoogleClientService
     App\Service\GoogleClientService:  
+    # Circuit Breaker Service
+    App\Service\CircuitBreakerService:
+        arguments:
+            $cache: '@cache.app'
+            $logger: '@logger'
+            $failureThreshold: 5       # Anzahl Fehler bevor Circuit öffnet
+            $timeout: 60               # Sekunden bis Half-Open-Versuch
+            $successThreshold: 2       # Erfolge zum Schließen im Half-Open
+        tags:
+            - { name: 'monolog.logger', channel: 'circuit_breaker' }
 
+    # AiAgentService mit Circuit Breaker
+    App\Service\AiAgentService:
+        arguments:
+            $agent: '@ai.agent.file_generator'
+            $logger: '@logger'
+            $agentStatusService: '@App\Service\AgentStatusService'
+            $deployTool: '@App\Tool\DeployGeneratedCodeTool'
+            $bus: '@messenger.default_bus'
+            $conn: '@doctrine.dbal.default_connection'
+            $circuitBreaker: '@App\Service\CircuitBreakerService'
             ### Tools ###
 
     # CodeSaverTool
