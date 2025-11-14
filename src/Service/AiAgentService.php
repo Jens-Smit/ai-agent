@@ -9,12 +9,16 @@ use App\Service\AgentStatusService;
 use App\Tool\DeployGeneratedCodeTool;
 use Symfony\Contracts\HttpClient\Exception\ServerExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
+use Symfony\Component\Messenger\MessageBusInterface;
+use Symfony\Component\Messenger\Stamp\DelayStamp;
+use Doctrine\DBAL\Connection;
+use Symfony\Component\Uid\Uuid;
 use Throwable;
 
 class AiAgentService
 {
-    private const MAX_RETRIES = 50;
-    private const BASE_DELAY_SECONDS = 5; // Baseline für Backoff (für lokale Tests anpassen)
+    private const MAX_RETRIES = 10;
+    private const BASE_DELAY_SECONDS = 10; // Baseline für Backoff (für lokale Tests anpassen)
     private const MAX_BACKOFF_SECONDS = 300; // Max Wartezeit zwischen Retries
     private const MAX_TOTAL_SECONDS = 3600; // max Gesamtlaufzeit des Retries (safety)
 
@@ -23,153 +27,118 @@ class AiAgentService
         private AgentInterface $agent,
         private LoggerInterface $logger,
         private AgentStatusService $agentStatusService,
-        private DeployGeneratedCodeTool $deployTool
+        private DeployGeneratedCodeTool $deployTool,
+        private MessageBusInterface $bus,
+        private Connection $conn
     ) {}
 
-    public function runPrompt(string $prompt): void
+    /**
+     * Run prompt. Non-blocking retry approach: re-dispatches job with DelayStamp on transient errors.
+     * If $sessionId is null a new UUID is generated.
+     */
+    public function runPrompt(string $prompt, ?string $sessionId = null, int $attempt = 1): void
     {
-        $this->agentStatusService->clearStatuses();
-        $this->agentStatusService->addStatus('Job gestartet für Prompt.');
+        $sessionId = $sessionId ?: Uuid::v4()->toRfc4122();
 
-        $messages = new MessageBag(Message::ofUser($prompt));
-
-        $attempt = 1;
-        $lastError = null;
-        $result = null;
-        $startTime = time();
-
-        while ($attempt <= self::MAX_RETRIES) {
-            // safety total time check
-            if ((time() - $startTime) > self::MAX_TOTAL_SECONDS) {
-                $this->agentStatusService->addStatus('Maximale Gesamtlaufzeit für Retries überschritten.');
-                $this->logger->error('Max total retry time exceeded', ['elapsed' => time() - $startTime]);
-                break;
-            }
-
-            try {
-                $this->agentStatusService->addStatus(sprintf('AI-Agent wird aufgerufen (Versuch %d/%d).', $attempt, self::MAX_RETRIES));
-                $result = $this->agent->call($messages);
-                $this->agentStatusService->addStatus('Antwort vom AI-Agent erhalten.');
-
-                // Zusätzliche Prüfung: Ergebnis darf nicht leer sein
-                $content = $this->extractContentSafely($result);
-                if ($content === '') {
-                    throw new \RuntimeException('Response does not contain any content.');
-                }
-
-                // Erfolg: Breche die Schleife ab
-                break;
-
-            } catch (Throwable $e) {
-                $lastError = $e;
-                $errorMessage = $e->getMessage() ?? get_class($e);
-                $isRetriable = false;
-
-                // 1. Standardmäßige retriable HTTP-Fehler (5xx)
-                if ($e instanceof ServerExceptionInterface) {
-                    $isRetriable = true;
-                }
-                // 2. Transport-/Verbindungsfehler
-                else if ($e instanceof TransportExceptionInterface) {
-                    $isRetriable = true;
-                }
-                // 3. API-Textchecks für typische transient messages
-                else if (
-                    stripos($errorMessage, '503') !== false ||
-                    stripos($errorMessage, 'UNAVAILABLE') !== false ||
-                    stripos($errorMessage, 'overloaded') !== false ||
-                    stripos($errorMessage, 'timed out') !== false ||
-                    stripos($errorMessage, 'timeout') !== false
-                ) {
-                    $isRetriable = true;
-                }
-                // 4. Leerer Body / Parser-Meldungen
-                else if (stripos($errorMessage, 'Response does not contain any content') !== false ||
-                         stripos($errorMessage, 'Invalid JSON') !== false ||
-                         stripos($errorMessage, 'Code execution failed') !== false) {
-                    // manche "Code execution failed" können transient sein; wir versuchen nochmal
-                    $isRetriable = true;
-                }
-
-                // Wenn retriable und noch Versuche übrig: Backoff mit Jitter
-                if ($isRetriable && $attempt < self::MAX_RETRIES) {
-                    $backoff = $this->computeBackoff($attempt);
-                    $this->logger->warning('Retriable Fehler beim Agent-Aufruf erkannt. Warte und versuche erneut.', [
-                        'attempt' => $attempt,
-                        'error_type' => $e::class,
-                        'message' => $errorMessage,
-                        'backoff_seconds' => $backoff,
-                    ]);
-
-                    $this->agentStatusService->addStatus(sprintf(
-                        'Fehler (Retriable) erkannt: %s. Warte %d Sek. vor erneutem Versuch.',
-                        $this->shortPreview($errorMessage),
-                        $backoff
-                    ));
-
-                    // blockierendes sleep ist ok in CLI/worker; in HTTP-requests lieber asynchrone retry-Mechanik
-                    sleep($backoff);
-                    $attempt++;
-                    continue;
-                }
-
-                // Nicht retriable Fehler oder letzter Versuch fehlgeschlagen
-                $this->logger->error('Fehler im AI-Agent-Service (Nicht-Retriable oder Max Retries erreicht)', [
-                    'message' => $errorMessage,
-                    'trace' => $e->getTraceAsString(),
-                    'attempt' => $attempt,
-                ]);
-
-                $this->agentStatusService->addStatus(sprintf(
-                    'Fehler beim Ausführen des AI-Agenten (Versuch %d): %s. Keine weiteren Retries.',
-                    $attempt,
-                    $this->shortPreview($errorMessage)
-                ));
-
-                // Optional: persist detailed error payload for post-mortem (implement as needed)
-                return;
-            }
+        // start / heartbeat
+        if ($attempt === 1) {
+            $this->agentStatusService->clearStatuses($sessionId);
+            $this->agentStatusService->addStatus($sessionId, 'Job gestartet für Prompt.');
+        } else {
+            $this->agentStatusService->addStatus($sessionId, sprintf('Job requeued (Attempt %d).', $attempt));
         }
 
-        // Ergebnisverarbeitung nur, wenn $result gesetzt wurde (Erfolgreicher Durchlauf)
-        if ($result !== null) {
-            $content = $this->extractContentSafely($result);
-
-            if ($content === '') {
-                $this->agentStatusService->addStatus('Agent-Antwort war leer, Verarbeitung abgebrochen.');
-                $this->logger->error('Agent returned empty content after successful call.');
-                return;
-            }
-
-            $this->logger->info('Agent erfolgreich ausgeführt', ['content_preview' => substr($content, 0, 200)]);
-            $this->agentStatusService->addStatus('AI-Agent erfolgreich abgeschlossen.');
-
-            // Hier würde die Logik zur Dateiverarbeitung/Deployment folgen.
-            // Beispiel: $this->deployTool->deployFromString($content);
+        $startTime = time();
+        if ((time() - $startTime) > self::MAX_TOTAL_SECONDS) {
+            $this->agentStatusService->addStatus($sessionId, 'Maximale Gesamtlaufzeit für Retries überschritten.');
+            $this->logger->error('Max total retry time exceeded', ['session' => $sessionId]);
             return;
         }
 
-        // Kein Erfolg nach allen Retries
-        $this->agentStatusService->addStatus(sprintf('Alle %d Versuche zur Ausführung des AI-Agenten sind fehlgeschlagen.', self::MAX_RETRIES));
-        $this->logger->error('All retries exhausted for AiAgentService', [
-            'max_retries' => self::MAX_RETRIES,
-            'last_error' => $lastError ? $lastError->getMessage() : null,
-        ]);
+        $messages = new MessageBag(Message::ofUser($prompt));
+
+        try {
+            $this->agentStatusService->addStatus($sessionId, sprintf('AI-Agent wird aufgerufen (Attempt %d).', $attempt));
+            $result = $this->agent->call($messages);
+
+            // Try to extract content safely
+            $content = $this->extractContentSafely($result);
+
+            // If empty, treat as transient
+            if ($content === '') {
+                throw new \RuntimeException('Response does not contain any content.');
+            }
+
+            // Success: persist RESULT and attempt deployment
+            $this->agentStatusService->addStatus($sessionId, 'RESULT: ' . $this->shortPreview($content, 300));
+            $this->logger->info('Agent erfolgreich ausgeführt', ['session' => $sessionId, 'preview' => $this->shortPreview($content, 200)]);
+
+            // Attempt deployment, mark DEPLOYMENT outcome
+            try {
+                $this->deployTool->deployFromString($content);
+                $this->agentStatusService->addStatus($sessionId, 'DEPLOYMENT: success');
+            } catch (Throwable $e) {
+                $this->agentStatusService->addStatus($sessionId, 'ERROR: Deploy failed: ' . $this->shortPreview($e->getMessage(), 200));
+                $this->logger->error('Deploy failed', ['session' => $sessionId, 'err' => $e->getMessage()]);
+            }
+
+            return;
+        } catch (Throwable $e) {
+            $errorMessage = $e->getMessage() ?? get_class($e);
+
+            // Best-effort raw extraction from exception or result
+            $rawResponse = $this->tryExtractRawFromException($e) ?? '';
+
+            // Persist failed payload for post-mortem
+            $this->persistFailedPayload($sessionId, $prompt, $rawResponse, $errorMessage, $attempt);
+
+            $isRetriable = $this->isTransientError($e);
+
+            if ($isRetriable && $attempt < self::MAX_RETRIES) {
+                $backoff = $this->computeBackoff($attempt);
+                $this->agentStatusService->addStatus($sessionId, sprintf(
+                    'Fehler (Retriable): %s. Requeued in %d s (Attempt %d).',
+                    $this->shortPreview($errorMessage, 140),
+                    $backoff,
+                    $attempt + 1
+                ));
+
+                $this->logger->warning('Requeueing AiAgentJob', [
+                    'session' => $sessionId,
+                    'attempt' => $attempt,
+                    'backoff' => $backoff,
+                    'err' => $errorMessage,
+                ]);
+
+                // Re-dispatch job with increased attempt and DelayStamp (milliseconds)
+                $newMessage = new \App\Message\AiAgentJob($prompt, $sessionId, [], $attempt + 1);
+                $this->bus->dispatch($newMessage, [new DelayStamp($backoff * 1000)]);
+                return;
+            }
+
+            // Non-retriable or max attempts reached: mark ERROR and stop
+            $this->agentStatusService->addStatus($sessionId, 'ERROR: ' . $this->shortPreview($errorMessage, 300));
+            $this->logger->error('AiAgentService unrecoverable error', [
+                'session' => $sessionId,
+                'attempt' => $attempt,
+                'err' => $errorMessage,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return;
+        }
     }
 
     private function computeBackoff(int $attempt): int
     {
         // Exponentielles Backoff mit Full jitter
         $expo = min(self::BASE_DELAY_SECONDS * (2 ** ($attempt - 1)), self::MAX_BACKOFF_SECONDS);
-        // Full jitter: random zwischen 0 und expo
         return (int) round(mt_rand(0, 1000) / 1000 * $expo);
     }
 
     private function extractContentSafely(mixed $result): string
     {
-        // Wenn Result ein Response-Objekt oder ein spezifisches Agent-Result ist, adaptieren Sie diese Methode.
         if (is_object($result)) {
-            // versuchen gängige Methoden
             if (method_exists($result, 'getContent')) {
                 try {
                     $c = $result->getContent();
@@ -189,10 +158,13 @@ class AiAgentService
             }
 
             // Fallback: serialisieren
-            return json_encode($result);
+            try {
+                return json_encode($result);
+            } catch (Throwable $e) {
+                return '';
+            }
         }
 
-        // scalar or null
         return is_scalar($result) ? (string) $result : ($result === null ? '' : json_encode($result));
     }
 
@@ -200,5 +172,66 @@ class AiAgentService
     {
         $s = trim(preg_replace('/\s+/', ' ', $text));
         return mb_strlen($s) > $len ? mb_substr($s, 0, $len) . '…' : $s;
+    }
+
+    private function isTransientError(Throwable $e): bool
+    {
+        $msg = strtolower($e->getMessage() ?? '');
+
+        if ($e instanceof ServerExceptionInterface || $e instanceof TransportExceptionInterface) {
+            return true;
+        }
+
+        $transientKeywords = ['503', 'unavailable', 'overloaded', 'timed out', 'timeout', 'rate limit', 'response does not contain any content', 'invalid json', 'connection reset', 'temporar'];
+        foreach ($transientKeywords as $k) {
+            if (strpos($msg, $k) !== false) {
+                return true;
+            }
+        }
+
+        // "Code execution failed" can be transient depending on provider; allow one or two retries
+        if (strpos($msg, 'code execution failed') !== false) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function tryExtractRawFromException(Throwable $e): ?string
+    {
+        // If exception exposes a response, try to pull it out (SDK specific)
+        if (method_exists($e, 'getResponse')) {
+            try {
+                $resp = $e->getResponse();
+                if (is_object($resp) && method_exists($resp, 'getContent')) {
+                    return (string) $resp->getContent(false);
+                }
+            } catch (Throwable) {
+                // ignore
+            }
+        }
+
+        // fallback to message
+        return $e->getMessage();
+    }
+
+    private function persistFailedPayload(string $sessionId, string $request, string $response, string $errorMessage, int $attempt): void
+    {
+        try {
+            $this->conn->insert('failed_payloads', [
+                'session_id' => $sessionId,
+                'request' => substr($request, 0, 65535),
+                'response' => substr($response, 0, 65535),
+                'error_message' => substr($errorMessage, 0, 1024),
+                'attempt' => $attempt,
+                'created_at' => (new \DateTimeImmutable())->format('Y-m-d H:i:s'),
+            ]);
+        } catch (Throwable $e) {
+            // Log but don't fail the worker because of persistence problems
+            $this->logger->error('Failed to persist failed_payloads', [
+                'session' => $sessionId,
+                'err' => $e->getMessage()
+            ]);
+        }
     }
 }
