@@ -3,8 +3,11 @@
 
 parameters:
     app.upload_directory: '%kernel.project_dir%/public/uploads'
-    app.api_url: 'http://127.0.0.1:8000'
-    chroma.base_url: 'http://localhost:8000'
+    app.api_url: 'https://127.0.0.1:8000'
+    chroma.base_url: 'https://localhost:8000'
+    google_client_id: '%env(GOOGLE_CLIENT_ID)%'
+    google_client_secret: '%env(GOOGLE_CLIENT_SECRET)%'
+    google_redirect_uri: '%env(GOOGLE_REDIRECT_URI)%'
 
 services:
     # Standardkonfiguration für Services in dieser Datei
@@ -31,23 +34,7 @@ services:
             $jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
             $userProvider: '@security.user.provider.concrete.app_user_provider'
     
-    # Google Authenticator
-    App\Security\GoogleAuthenticator:
-        arguments:
-            $clientRegistry: '@knpu.oauth2.registry'
-            $userProvider: '@App\Security\GoogleUserProvider'
-            #$jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
-            #$refreshTokenGenerator: '@gesdinet.jwtrefreshtoken.refresh_token_generator'
-            #$refreshTokenManager: '@gesdinet.jwtrefreshtoken.refresh_token_manager'
-        tags:
-            - { name: 'monolog.logger', channel: 'security' }
-    # Google User Provider
-    App\Security\GoogleUserProvider:
-        autowire: true
-        autoconfigure: true  
-    # Repositories
-    App\Repository\AgentStatusRepository: ~
-    App\Repository\KnowledgeDocumentRepository: ~
+   
 
         ### Services & Tools ###
         ### Services ###
@@ -61,7 +48,11 @@ services:
         arguments:
             $frontendUrl: '%env(FRONTEND_URL)%'
     # GoogleClientService
-    App\Service\GoogleClientService:  
+    App\Service\GoogleClientService:
+        arguments:
+            $googleClientId: '%env(GOOGLE_CLIENT_ID)%'
+            $googleClientSecret: '%env(GOOGLE_CLIENT_SECRET)%'
+            $frontendUrl: '%env(FRONTEND_URL)%'  
     # Circuit Breaker Service
     App\Service\CircuitBreakerService:
         arguments:
@@ -153,7 +144,13 @@ services:
             $logger: '@logger'
         tags:
             - { name: 'ai.tool' }
-                 
+    # GoogleCalendarCreateEventTool        
+    App\Tool\GoogleCalendarCreateEventTool:
+        arguments:
+            $logger: '@logger'
+            $security: '@security.helper' # <-- Security wird über security.helper injiziert
+            $googleClientService: '@App\Service\GoogleClientService'
+        tags: ['ai.tool']            
                      
             
         

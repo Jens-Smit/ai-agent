@@ -11,7 +11,7 @@ use App\Entity\User;
 use Doctrine\ORM\EntityManagerInterface;
 use Google\Service\Calendar;
 use Google\Service\Calendar\Event;
-use Symfony\Component\Security\Core\Security;
+use Symfony\Bundle\SecurityBundle\Security;
 use App\Service\GoogleClientService; // Import the new service
 
 #[AsTool(
@@ -35,15 +35,15 @@ final class GoogleCalendarCreateEventTool
      * @return array Returns an array with status and event details if successful, or an error message.
      */
     public function __invoke(
-        #[With(description: 'The title of the calendar event.')]
+  
         string $title,
-        #[With(pattern: '/^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}$/', description: 'The start time of the event in "YYYY-MM-DDTHH:MM:SS" format.')]
+        #[With(pattern: '/^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}$/')]
         string $startTime,
-        #[With(pattern: '/^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}$/', description: 'The end time of the event in "YYYY-MM-DDTHH:MM:SS" format.')]
+        #[With(pattern: '/^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}$/')]
         string $endTime,
-        #[With(description: 'An optional description for the event.')]
+       
         ?string $description = null,
-        #[With(description: 'An optional location for the event.')]
+       
         ?string $location = null
     ): array {
         $this->logger->info('GoogleCalendarCreateEventTool execution started', [

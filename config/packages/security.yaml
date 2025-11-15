@@ -1,108 +1,62 @@
-
 security:
     password_hashers:
-        Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface: 'auto'
+        Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface: auto
 
     providers:
         app_user_provider:
             entity:
                 class: App\Entity\User
                 property: email
-        app_google_user_provider:
-            id: App\Security\GoogleUserProvider
+
     firewalls:
-        # 1. Dev-Firewall für Profiler, etc.
         dev:
             pattern: ^/(_(profiler|wdt)|css|images|js)/
             security: false
-        
-        # 2. Refresh Token Firewall (WICHTIG: Muss VOR der API-Firewall stehen!)
+
         refresh:
             pattern: ^/api/token/refresh$
             stateless: true
             provider: app_user_provider
             refresh_jwt:
                 check_path: /api/token/refresh
-        # 3. NEUE FIREWALL: Behandelt Google OAuth und Web-Flows        
-        oauth_flow:
-            # WICHTIG: Füge /connect/google/check hinzu, damit der Authenticator greift
-            pattern: ^/connect/google|^/connect/google/check|^/profile 
-            stateless: false # WICHTIG: OAuth-Flow ist STATEFUL (Session/Cookies)
-            provider: app_google_user_provider 
-            
+
+        main:
+            # Firewall für deine Web-App + OAuth
+            provider: app_user_provider
             custom_authenticators:
-                - App\Security\GoogleAuthenticator # Fängt den Callback ab
-        
-        
-        # 4. Haupt-API Firewall
+                - App\Security\GoogleAuthenticator
+            lazy: true
+            
+            logout:
+                path: app_logout
+                # wohin nach logout
+                target: app_home
         api:
             pattern: ^/api
             stateless: true
             provider: app_user_provider
-            
-            # Custom Authenticators für JWT-basierte Authentifizierung
             custom_authenticators:
                 - App\Security\JwtTokenAuthenticator
-                - App\Security\GoogleAuthenticator
-            
-           
 
     access_control:
-        # ========================================
-        # ÖFFENTLICHE ROUTEN (Keine Authentifizierung)
-        # ========================================
-
-        # Swagger-UI und Doku ohne Authentifizierung
+        - { path: ^/connect/google, roles: PUBLIC_ACCESS }
+        - { path: ^/connect/google/check, roles: PUBLIC_ACCESS }
         - { path: ^/api/doc, roles: PUBLIC_ACCESS }
-
-        # Auth-Endpunkte
         - { path: ^/api/login$, roles: PUBLIC_ACCESS }
-        - { path: ^/api/register$, roles: PUBLIC_ACCESS, methods: [POST] }
-        - { path: ^/api/token/refresh$, roles: PUBLIC_ACCESS }
-        
-        # Passwort-Reset
+        - { path: ^/api/register$, roles: PUBLIC_ACCESS }
+    
         - { path: ^/api/password/request-reset$, roles: PUBLIC_ACCESS }
         - { path: ^/api/password/reset$, roles: PUBLIC_ACCESS }
-        
-        # AI Datei-Generierung (öffentlich zugänglich)
+
         - { path: ^/api/agent, roles: PUBLIC_ACCESS }
         - { path: ^/api/index-knowledge, roles: PUBLIC_ACCESS }
         - { path: ^/api/devAgent, roles: PUBLIC_ACCESS }
         - { path: ^/api/frondend_devAgent, roles: PUBLIC_ACCESS }
-
-        # Health-Check (falls vorhanden)
-        - { path: ^/health$, roles: PUBLIC_ACCESS }
-
-
-        - { path: ^/connect/google, roles: PUBLIC_ACCESS }
-        - { path: ^/connect/google/check, roles: PUBLIC_ACCESS }
-        - { path: ^/profile, roles: IS_AUTHENTICATED_FULLY }
-        # ========================================
-        # GESCHÜTZTE ROUTEN (Authentifizierung erforderlich)
-        # ========================================
-       
         
-        - { path: ^/api/password/change, roles: IS_AUTHENTICATED_FULLY }
+        - { path: ^/api/token/refresh$, roles: PUBLIC_ACCESS }
 
-
-
-        # Passwortd ändern für authentifizierte Benutzer
-        - { path: ^/api/password/change, roles: IS_AUTHENTICATED_FULLY }
-
-        - { path: ^/profile, roles: IS_AUTHENTICATED_REMEMBERED }
-        # Passwort ändern (nur für authentifizierte Benutzer)
-        - { path: ^/api/password/change$, roles: IS_AUTHENTICATED_FULLY }
-        
-        # Session-Verwaltung (falls implementiert)
-        - { path: ^/api/sessions, roles: IS_AUTHENTICATED_FULLY }
-        
-        # Logout
-        - { path: ^/api/logout$, roles: IS_AUTHENTICATED_FULLY }
-        
-        # ========================================
-        # FALLBACK: Alle anderen API-Routen sichern
-        # ========================================
         - { path: ^/api, roles: IS_AUTHENTICATED_FULLY }
+
 
 when@test:
     security:

@@ -1,0 +1,292 @@
+parameters:
+    locale: 'en'
+    app.jwtsecret: '%env(JWT_SECRET)%'
+    mailer.dsn.smtp: 'smtp://user:pass@smtp.example.com:587' # Default SMTP DSN for MailService
+
+services:
+    _defaults:
+        autowire: true      # Automatically injects dependencies in your services.
+        autoconfigure: true # Automatically registers your services as commands, event subscribers, etc.
+        public: false       # By default, services are private.
+
+    App\Kernel:
+        arguments:
+            $projectDir: '%kernel.project_dir%'
+
+    App\Controller\:
+        resource: '../src/Controller'
+        tags: ['controller.service_arguments']
+
+    App\Service\AgentStatusService:
+        arguments:
+            $em: '@doctrine.orm.entity_manager'
+
+    App\Service\AiAgentService:
+        arguments:
+            $agent: '@ai.agent.file_generator'
+            $logger: '@logger'
+            $agentStatusService: '@App\Service\AgentStatusService'
+            $deployTool: '@App\Tool\DeployGeneratedCodeTool'
+            $bus: '@messenger.default_bus'
+            $conn: '@doctrine.dbal.default_connection'
+            $circuitBreaker: '@App\Service\CircuitBreakerService'
+
+    App\Service\CircuitBreakerService:
+        arguments:
+            $cache: '@cache.app'
+            $logger: '@logger'
+            $failureThreshold: '%env(int:CIRCUIT_BREAKER_FAILURE_THRESHOLD)%'
+            $timeout: '%env(int:CIRCUIT_BREAKER_TIMEOUT)%'
+            $successThreshold: '%env(int:CIRCUIT_BREAKER_SUCCESS_THRESHOLD)%'
+
+    App\Tool\CodeSaverTool:
+        arguments:
+            $logger: '@logger'
+            $filesystem: '@filesystem'
+        tags: ['ai.tool']
+
+    App\Tool\DeployGeneratedCodeTool:
+        arguments:
+            $kernel: '@kernel'
+            $logger: '@logger'
+        tags: ['ai.tool']
+
+    App\Tool\AnalyzeCodeTool:
+        arguments:
+            $kernel: '@kernel'
+        tags: ['ai.tool']
+
+    App\Tool\WebScraperTool:
+        arguments:
+            $httpClient: '@http_client'
+            $logger: '@logger'
+        tags: ['ai.tool']
+
+    App\Tool\ApiClientTool:
+        arguments:
+            $httpClient: '@http_client'
+            $logger: '@logger'
+        tags: ['ai.tool']
+
+    App\Tool\KnowledgeIndexerTool:
+        arguments:
+            $platform: '@ai.platform'
+            $em: '@doctrine.orm.entity_manager'
+            $knowledgeRepo: '@App\Repository\KnowledgeDocumentRepository'
+            $logger: '@logger'
+        tags: ['ai.tool']
+
+    App\Tool\MySQLKnowledgeSearchTool:
+        arguments:
+            $platform: '@ai.platform'
+            $knowledgeRepo: '@App\Repository\KnowledgeDocumentRepository'
+            $logger: '@logger'
+        tags: ['ai.tool']
+
+    App\Tool\PdfGenerator:
+        arguments:
+            $logger: '@logger'
+            $projectRootDir: '%kernel.project_dir%'
+        tags: ['ai.tool']
+
+    App\Tool\SandboxExecutorTool:
+        arguments:
+            $kernel: '@kernel'
+            $logger: '@logger'
+            $statusService: '@App\Service\AgentStatusService'
+        tags: ['ai.tool']
+
+    # Mail Service
+    App\Service\MailService:
+        arguments:
+            $mailer: '@mailer'
+            $entityManager: '@doctrine.orm.entity_manager'
+            $logger: '@logger'
+            $defaultSmtpDsn: '%mailer.dsn.smtp%' # Injected parameter
+
+    # Send Email Tool
+    App\Tool\SendEmailTool:
+        arguments:
+            $logger: '@logger'
+            $security: '@security.helper'
+            $mailService: '@App\Service\MailService'
+        tags: ['ai.tool']
+
+    # Receive Emails Tool
+    App\Tool\ReceiveEmailsTool:
+        arguments:
+            $logger: '@logger'
+            $security: '@security.helper'
+            $mailService: '@App\Service\MailService'
+        tags: ['ai.tool']
+
+    App\Service\AuditLoggerService:
+        arguments:
+            $logger: '@logger'
+            $requestStack: '@request_stack'
+
+    App\Service\AuthService:
+        arguments:
+            $em: '@doctrine.orm.entity_manager'
+            $passwordHasher: '@security.user_password_hasher'
+
+    App\Service\PasswordService:
+        arguments:
+            $userRepository: '@App\Repository\UserRepository'
+            $em: '@doctrine.orm.entity_manager'
+            $passwordHasher: '@security.user_password_hasher'
+            $mailer: '@mailer'
+            $frontendUrl: '%env(FRONTEND_URL)%'
+            $resetTtlSeconds: '%env(int:PASSWORD_RESET_TTL)%'
+
+    App\Service\GoogleClientService:
+        arguments:
+            $entityManager: '@doctrine.orm.entity_manager'
+            $logger: '@logger'
+            $router: '@router'
+            $googleClientId: '%env(GOOGLE_CLIENT_ID)%'
+            $googleClientSecret: '%env(GOOGLE_CLIENT_SECRET)%'
+            $frontendUrl: '%env(FRONTEND_URL)%'
+
+    App\Tool\GoogleCalendarCreateEventTool:
+        arguments:
+            $logger: '@logger'
+            $security: '@security.helper'
+            $googleClientService: '@App\Service\GoogleClientService'
+        tags: ['ai.tool']
+
+    App\Tool\ToolRequestor:
+        arguments:
+            $httpClient: '@http_client'
+            $logger: '@logger'
+        tags: ['ai.tool']
+
+    # Repositories, if not configured via annotations or defaults
+    App\Repository\UserRepository:
+        factory: ['@doctrine', 'getRepository']
+        arguments:
+            - 'App\Entity\User'
+
+    App\Repository\KnowledgeDocumentRepository:
+        factory: ['@doctrine', 'getRepository']
+        arguments:
+            - 'App\Entity\KnowledgeDocument'
+
+    # Add custom loggers (e.g., for security events)
+    monolog.logger.security:
+        class: Symfony\Bridge\Monolog\Logger
+        arguments: ['security']
+        tags:
+            - { name: 'monolog.logger', channel: 'security' }
+
+framework:
+    mailer:
+        dsn: '%env(MAILER_DSN)%'
+
+doctrine:
+    dbal:
+        url: '%env(DATABASE_URL)%'
+        connections:
+            default:
+                url: '%env(DATABASE_URL)%'
+
+doctrine_migrations:
+    migrations_paths:
+        'App\Migrations': '%kernel.project_dir%/src/Migrations'
+    enable_profiler: false
+
+lexik_jwt_authentication:
+    secret_key: '%kernel.project_dir%/%env(JWT_SECRET_KEY_PATH)%'
+    public_key: '%kernel.project_dir%/%env(JWT_PUBLIC_KEY_PATH)%'
+    pass_phrase: '%env(JWT_PASSPHRASE)%'
+    token_ttl: 3600 # 1 hour
+
+gesdinet_jwt_refresh_token:
+    ttl: 604800 # 7 days
+    firewall: api
+
+security:
+    password_hashers:
+        Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface: 'auto'
+    providers:
+        users:
+            entity:
+                class: App\Entity\User
+                property: email
+    firewalls:
+        dev:
+            pattern: ^/(_(profiler|wdt)|css|images|js)/
+            security: false
+        api:
+            pattern: ^/api
+            stateless: true
+            jwt: ~
+            custom_authenticator: App\Security\JwtTokenAuthenticator
+        main:
+            lazy: true
+            provider: users
+            custom_authenticators:
+                - App\Security\GoogleAuthenticator
+            entry_point: App\Security\JwtTokenAuthenticator # Wichtig: Entry Point für 401 Responses
+
+    access_control:
+        - { path: ^/api/login, roles: PUBLIC_ACCESS }
+        - { path: ^/api/register, roles: PUBLIC_ACCESS }
+        - { path: ^/api/password/request-reset, roles: PUBLIC_ACCESS }
+        - { path: ^/api/password/reset, roles: PUBLIC_ACCESS }
+        - { path: ^/api/doc, roles: PUBLIC_ACCESS }
+        - { path: ^/api/health, roles: PUBLIC_ACCESS }
+        - { path: ^/connect/google, roles: PUBLIC_ACCESS }
+        - { path: ^/api, roles: IS_AUTHENTICATED_FULLY } # Alle anderen API-Routen erfordern Authentifizierung
+        - { path: ^/, roles: PUBLIC_ACCESS } # Frontend-Routen
+        
+knpu_oauth2_client:
+    clients:
+        google:
+            type: oauth2
+            provider: google
+            client_id: '%env(GOOGLE_CLIENT_ID)%'
+            client_secret: '%env(GOOGLE_CLIENT_SECRET)%'
+            access_token_url: 'https://oauth2.googleapis.com/token'
+            auth_url: 'https://accounts.google.com/o/oauth2/auth'
+            base_api_url: 'https://www.googleapis.com/oauth2/v4/'
+            scope: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/calendar']
+            redirect_route: 'connect_google_check'
+            redirect_params: {}
+
+ai:
+    platform:
+        default: google
+        google:
+            api_key: '%env(GEMINI_API_KEY)%'
+            default_model: gemini-1.5-pro-latest
+            project_id: '%env(GOOGLE_PROJECT_ID)%' # Optional, for some Google Cloud services
+
+    agents:
+        personal_assistent:
+            platform: google
+            tools: ['google_calendar_create_event', 'send_email', 'receive_emails', 'mysql_knowledge_search', 'web_scraper', 'api_client', 'PdfGenerator', 'tool_requestor']
+            model: gemini-1.5-pro-latest
+        file_generator:
+            platform: google
+            tools: ['save_code_file', 'analyze_code', 'run_code_in_sandbox', 'deploy_generated_code']
+            model: gemini-1.5-pro-latest
+            # model: gemini-pro # For faster (but less capable) code generation
+        frontend_generator:
+            platform: google
+            tools: ['save_code_file', 'deploy_generated_code']
+            model: gemini-1.5-pro-latest
+
+monolog:
+    channels: ['!event', '!doctrine', '!security'] # standard channels excluding event/doctrine/security
+    handlers:
+        main:
+            type: stream
+            path: '%kernel.logs_dir%/%kernel.environment%.log'
+            level: debug
+            process_psr_3_messages: true
+        security:
+            type: stream
+            path: '%kernel.logs_dir%/security_%kernel.environment%.log'
+            level: info
+            channels: ['security']

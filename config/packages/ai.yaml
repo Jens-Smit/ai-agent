@@ -108,6 +108,8 @@ ai:
         - 'App\Tool\ToolRequestor'
         - 'App\Tool\PdfGenerator'
         - 'App\Tool\MySQLKnowledgeSearchTool'
+        - 'App\Tool\GoogleCalendarCreateEventTool'
+        
         
                 
         

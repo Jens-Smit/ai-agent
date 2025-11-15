@@ -53,8 +53,8 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     /**
      * Ablaufzeitpunkt des Access Tokens
      */
-    #[ORM\Column(type: 'datetime', nullable: true)]
-    private ?\DateTimeInterface $googleTokenExpiresAt = null;
+    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
+    private ?\DateTimeImmutable $googleTokenExpiresAt = null;
 
     /**
      * Password Reset Token (Hash für Sicherheit)

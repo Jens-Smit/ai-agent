@@ -27,7 +27,8 @@ class GoogleClientService
         $this->googleClient = new Client();
         $this->googleClient->setClientId($this->googleClientId);
         $this->googleClient->setClientSecret($this->googleClientSecret);
-        
+       
+
         // Die Redirect URI muss genau mit der in der Google Console übereinstimmen.
         // Hier wird sie dynamisch aus der frontendUrl und der Route generiert.
         $this->googleClient->setRedirectUri($this->frontendUrl . $this->router->generate('connect_google_check'));

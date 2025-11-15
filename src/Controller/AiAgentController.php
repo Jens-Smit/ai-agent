@@ -2,25 +2,16 @@
 
 namespace App\Controller;
 
-use App\DTO\AgentPromptRequest;
 use App\Message\AiAgentJob;
-use App\Message\FrontendGeneratorJob;
 use App\Service\AgentStatusService;
-use App\Tool\DeployGeneratedCodeTool;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpFoundation\Session\SessionInterface;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Routing\Attribute\Route;
 use Psr\Log\LoggerInterface;
-use Symfony\AI\Agent\AgentInterface;
 use Symfony\Component\Validator\Validator\ValidatorInterface;
-use Symfony\AI\Platform\Message\MessageBag;
-use Symfony\AI\Platform\Message\Message;
 
 class AiAgentController extends AbstractController
 {
@@ -56,12 +47,6 @@ class AiAgentController extends AbstractController
         ]);
     }
 
-
-
-
-
-    
-    
 
     // OpenAPI Schema for AgentPromptRequest DTO
     #[OA\Schema(
