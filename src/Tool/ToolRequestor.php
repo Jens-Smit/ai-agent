@@ -21,15 +21,15 @@ final class ToolRequestor
     private HttpClientInterface $httpClient;
     private LoggerInterface $logger;
 
-    public function __construct(HttpClientInterface $httpClient = null, LoggerInterface $logger)
-    {
-        // WICHTIG: Hier ggf. die 'verify_peer' Option für die lokale Entwicklung setzen (siehe vorherige Antwort)
-        $this->httpClient = $httpClient ?? HttpClient::create([
-            // 'verify_peer' => false, 
-            // 'verify_host' => false, // NUR FÜR LOKALE ENTWICKLUNG!
-        ]);
+    public function __construct(
+    LoggerInterface $logger,
+        HttpClientInterface|null $httpClient
+    ) {
+        $this->httpClient = $httpClient ?? HttpClient::create([]);
         $this->logger = $logger;
     }
+
+
 
     /**
      * Sendet den finalen Entwicklungs-Prompt an den /api/devAgent Endpunkt.

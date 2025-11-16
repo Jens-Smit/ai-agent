@@ -13,13 +13,10 @@ use Symfony\Component\Security\Http\Authenticator\AbstractAuthenticator;
 use Symfony\Component\Security\Http\Authenticator\Passport\Badge\UserBadge;
 use Symfony\Component\Security\Http\Authenticator\Passport\Passport;
 use Symfony\Component\Security\Http\Authenticator\Passport\SelfValidatingPassport;
-// Wir benötigen dieses Interface, um die Methode start() hinzuzufügen,
-// obwohl wir von AbstractAuthenticator erben.
 use Symfony\Component\Security\Http\EntryPoint\AuthenticationEntryPointInterface;
 use Symfony\Component\Security\Core\Exception\CustomUserMessageAuthenticationException;
 
-
-// Die Klasse muss AuthenticationEntryPointInterface implementieren, um die start()-Methode bereitzustellen.
+// Die Klasse liest den JWT aus dem Cookie und authentifiziert den Benutzer.
 class JwtTokenAuthenticator extends AbstractAuthenticator implements AuthenticationEntryPointInterface
 {
     public function __construct(
@@ -27,54 +24,62 @@ class JwtTokenAuthenticator extends AbstractAuthenticator implements Authenticat
         private readonly UserProviderInterface $userProvider
     ) {}
 
+    /**
+     * Prüft, ob dieser Authenticator für die aktuelle Anfrage zuständig ist.
+     * Er ist zuständig, wenn das 'BEARER' Cookie vorhanden ist.
+     */
     public function supports(Request $request): ?bool
     {
         $accessTokenCookieName = 'BEARER';
-        // Wir prüfen, ob das Cookie existiert und nicht leer ist.
+        // Nur unterstützen, wenn das Cookie vorhanden ist und nicht leer.
         return $request->cookies->has($accessTokenCookieName) 
            && !empty($request->cookies->get($accessTokenCookieName));
     }
 
-    
+    /**
+     * Liest den JWT aus dem Cookie und erstellt ein Passport-Objekt.
+     */
     public function authenticate(Request $request): Passport
     {
         $accessTokenCookieName = 'BEARER'; 
         $token = $request->cookies->get($accessTokenCookieName);
 
-        // Die Prüfung ist redundant wegen supports(), dient aber als Sicherheitsnetz,
-        // falls der Token null oder leer ist. Wir verwenden CustomUserMessageAuthenticationException
-        // anstelle der generischen AuthenticationException für bessere Fehlermeldungen.
+        // Dies sollte nicht fehlschlagen, da supports() true war, aber dient als Sicherheitsnetz.
         if (!$token) {
-             throw new CustomUserMessageAuthenticationException('Access Token Cookie nicht gefunden. Authentifizierung fehlgeschlagen.');
+              throw new CustomUserMessageAuthenticationException('Access Token Cookie nicht gefunden.');
         }
 
         try {
+            // Token parsen und Payload extrahieren.
             $payload = $this->jwtManager->parse($token);
             
             if (!isset($payload['username'])) {
                 throw new CustomUserMessageAuthenticationException('Ungültiger Token: Benutzername fehlt.');
             }
 
+            // Erstellt den Passport mit dem UserBadge, um den Benutzer zu laden.
             return new SelfValidatingPassport(
                 new UserBadge($payload['username'], function ($userIdentifier) {
                     return $this->userProvider->loadUserByIdentifier($userIdentifier);
                 })
             );
         } catch (\Exception $e) {
-            // Fängt alle JWT-bezogenen Fehler (Signatur, Ablauf) ab
+            // Fängt alle JWT-Fehler ab (Signatur, Ablaufzeit, etc.).
+            // Wenn der Fehler weiterhin besteht, können Sie hier temporär dd($e); einfügen.
+            dd($e->getMessage());
             throw new CustomUserMessageAuthenticationException('Ungültiger oder abgelaufener Token.');
         }
     }
 
     public function onAuthenticationSuccess(Request $request, TokenInterface $token, string $firewallName): ?Response
     {
-        // Null = weiter mit dem Request
+        // Erfolg: Einfach fortfahren.
         return null;
     }
 
     public function onAuthenticationFailure(Request $request, AuthenticationException $exception): ?Response
     {
-        // Diese Methode wird aufgerufen, wenn die AUTHENTICATE-Methode fehlschlägt.
+        // Fehler: 401 JSON Response zurückgeben.
         return new JsonResponse([
             'error' => 'Authentication failed',
             'message' => $exception->getMessage()
@@ -82,9 +87,7 @@ class JwtTokenAuthenticator extends AbstractAuthenticator implements Authenticat
     }
     
     /**
-     * DIES IST DIE FEHLENDE METHODE, DIE DEN 500-FEHLER BEHEBT!
-     * Sie wird aufgerufen, wenn supports() false zurückgibt (also KEIN Token gesendet wurde) 
-     * und ein geschützter Endpunkt aufgerufen wird. Sie erzeugt den erwarteten 401-Response.
+     * Wird aufgerufen, wenn supports() false zurückgibt und der Nutzer nicht authentifiziert ist.
      */
     public function start(Request $request, AuthenticationException $authException = null): Response
     {

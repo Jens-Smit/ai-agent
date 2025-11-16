@@ -19,7 +19,13 @@ security:
             provider: app_user_provider
             refresh_jwt:
                 check_path: /api/token/refresh
-
+        api:
+            pattern: ^/api
+            stateless: true
+            provider: app_user_provider
+            custom_authenticators:
+                - App\Security\JwtTokenAuthenticator
+            
         main:
             # Firewall für deine Web-App + OAuth
             provider: app_user_provider
@@ -31,31 +37,25 @@ security:
                 path: app_logout
                 # wohin nach logout
                 target: app_home
-        api:
-            pattern: ^/api
-            stateless: true
-            provider: app_user_provider
-            custom_authenticators:
-                - App\Security\JwtTokenAuthenticator
+        
 
     access_control:
+        - { path: ^/api, roles: PUBLIC_ACCESS, methods: [OPTIONS] }
         - { path: ^/connect/google, roles: PUBLIC_ACCESS }
         - { path: ^/connect/google/check, roles: PUBLIC_ACCESS }
         - { path: ^/api/doc, roles: PUBLIC_ACCESS }
         - { path: ^/api/login$, roles: PUBLIC_ACCESS }
         - { path: ^/api/register$, roles: PUBLIC_ACCESS }
-    
+        
         - { path: ^/api/password/request-reset$, roles: PUBLIC_ACCESS }
         - { path: ^/api/password/reset$, roles: PUBLIC_ACCESS }
-
         - { path: ^/api/agent, roles: PUBLIC_ACCESS }
         - { path: ^/api/index-knowledge, roles: PUBLIC_ACCESS }
         - { path: ^/api/devAgent, roles: PUBLIC_ACCESS }
         - { path: ^/api/frondend_devAgent, roles: PUBLIC_ACCESS }
-        
         - { path: ^/api/token/refresh$, roles: PUBLIC_ACCESS }
 
-        - { path: ^/api, roles: IS_AUTHENTICATED_FULLY }
+        
 
 
 when@test:

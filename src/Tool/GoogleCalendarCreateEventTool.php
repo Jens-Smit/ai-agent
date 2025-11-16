@@ -8,7 +8,6 @@ use Symfony\AI\Agent\Toolbox\Attribute\AsTool;
 use Symfony\AI\Platform\Contract\JsonSchema\Attribute\With;
 use Psr\Log\LoggerInterface;
 use App\Entity\User;
-use Doctrine\ORM\EntityManagerInterface;
 use Google\Service\Calendar;
 use Google\Service\Calendar\Event;
 use Symfony\Bundle\SecurityBundle\Security;
@@ -35,16 +34,14 @@ final class GoogleCalendarCreateEventTool
      * @return array Returns an array with status and event details if successful, or an error message.
      */
     public function __invoke(
-  
+    
         string $title,
-        #[With(pattern: '/^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}$/')]
+        #[With(pattern: '/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$/')]
         string $startTime,
-        #[With(pattern: '/^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}$/')]
+        #[With(pattern: '/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$/')]
         string $endTime,
-       
-        ?string $description = null,
-       
-        ?string $location = null
+        string|null $description = null,
+        string|null $location = null
     ): array {
         $this->logger->info('GoogleCalendarCreateEventTool execution started', [
             'title' => $title,
