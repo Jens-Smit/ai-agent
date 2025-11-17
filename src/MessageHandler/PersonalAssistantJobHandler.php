@@ -5,6 +5,8 @@ namespace App\MessageHandler;
 
 use App\Message\PersonalAssistantJob;
 use App\Service\AgentStatusService;
+use App\Service\GoogleClientService;
+use App\Repository\UserRepository;
 use Psr\Log\LoggerInterface;
 use Symfony\AI\Agent\AgentInterface;
 use Symfony\AI\Platform\Message\Message;
@@ -24,7 +26,9 @@ final class PersonalAssistantJobHandler
         #[Autowire(service: 'ai.agent.personal_assistent')]
         private AgentInterface $agent,
         private AgentStatusService $agentStatusService,
-        private LoggerInterface $logger
+        private LoggerInterface $logger,
+        private UserRepository $userRepository,
+        private GoogleClientService $googleClientService
     ) {}
 
     public function __invoke(PersonalAssistantJob $job): void
@@ -37,8 +41,34 @@ final class PersonalAssistantJobHandler
         $this->agentStatusService->clearStatuses($job->sessionId);
         $this->agentStatusService->addStatus($job->sessionId, 'Personal Assistant Job gestartet');
 
+        // User laden
+        $user = $this->userRepository->find($job->userId);
+        if (!$user) {
+            $this->agentStatusService->addStatus($job->sessionId, 'ERROR: User nicht gefunden');
+            return;
+        }
+
+        // Google Token prüfen
+        if (empty($user->getGoogleAccessToken())) {
+            $this->agentStatusService->addStatus(
+                $job->sessionId,
+                'RESULT:Google Calendar nicht verbunden. Bitte /connect/google aufrufen.'
+            );
+            return;
+        }
+
+        // Google Client initialisieren
+        try {
+            $googleClient = $this->googleClientService->getClientForUser($user);
+        } catch (\Throwable $e) {
+            $this->agentStatusService->addStatus(
+                $job->sessionId,
+                'ERROR: Google Client konnte nicht initialisiert werden: ' . $e->getMessage()
+            );
+            return;
+        }
+
         $messages = new MessageBag(Message::ofUser($job->prompt));
-        
         $attempt = 1;
         $result = null;
 
@@ -49,41 +79,44 @@ final class PersonalAssistantJobHandler
                     sprintf('AI-Agent wird aufgerufen (Versuch %d/%d)', $attempt, self::MAX_RETRIES)
                 );
 
-                $result = $this->agent->call($messages);
-                
+                // AI-Agent-Aufruf, User und GoogleClient optional an Context übergeben
+                $result = $this->agent->call(
+                    $messages, [
+                        'user' => $user, 
+                        'google_client' => $googleClient,
+                        'google_access_token' => $user->getGoogleAccessToken(),
+                        
+                    ]);
+
                 $this->agentStatusService->addStatus($job->sessionId, 'Antwort vom AI-Agent erhalten');
                 $this->agentStatusService->addStatus(
-                    $job->sessionId, 
+                    $job->sessionId,
                     'RESULT:' . $result->getContent()
                 );
-                
+
                 $this->logger->info('PersonalAssistantJobHandler: Job erfolgreich abgeschlossen.');
                 break;
 
             } catch (\Throwable $e) {
                 $errorMessage = $e->getMessage();
-                $isRetriable = false;
-
-                if ($e instanceof ServerExceptionInterface ||
-                    $e instanceof TransportExceptionInterface ||
-                    str_contains($errorMessage, '503') ||
-                    str_contains($errorMessage, 'UNAVAILABLE') ||
-                    str_contains($errorMessage, 'overloaded') ||
-                    str_contains($errorMessage, 'Response does not contain any content.')) {
-                    $isRetriable = true;
-                }
+                $isRetriable = $e instanceof ServerExceptionInterface ||
+                               $e instanceof TransportExceptionInterface ||
+                               str_contains($errorMessage, '503') ||
+                               str_contains($errorMessage, 'UNAVAILABLE') ||
+                               str_contains($errorMessage, 'overloaded') ||
+                               str_contains($errorMessage, 'Response does not contain any content.');
 
                 if ($isRetriable && $attempt < self::MAX_RETRIES) {
                     $this->logger->warning('Retriable Fehler erkannt. Warte und versuche erneut.', [
                         'attempt' => $attempt,
                         'error' => $errorMessage
                     ]);
-                    
+
                     $this->agentStatusService->addStatus(
                         $job->sessionId,
                         sprintf('Fehler (Retriable). Warte %d Sek.', self::RETRY_DELAY_SECONDS)
                     );
-                    
+
                     sleep(self::RETRY_DELAY_SECONDS);
                     $attempt++;
                     continue;
@@ -93,7 +126,7 @@ final class PersonalAssistantJobHandler
                     'exception' => $errorMessage,
                     'attempt' => $attempt
                 ]);
-                
+
                 $this->agentStatusService->addStatus(
                     $job->sessionId,
                     'ERROR:' . $errorMessage

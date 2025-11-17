@@ -1,10 +1,11 @@
 <?php
-// src/Security/GoogleAuthenticator.php
+
 namespace App\Security;
 
 use KnpU\OAuth2ClientBundle\Client\ClientRegistry;
 use KnpU\OAuth2ClientBundle\Security\Authenticator\OAuth2Authenticator;
 use League\OAuth2\Client\Provider\GoogleUser;
+use League\OAuth2\Client\Token\AccessTokenInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Security\Http\Authenticator\Passport\Passport;
 use Symfony\Component\Security\Http\Authenticator\Passport\SelfValidatingPassport;
@@ -20,6 +21,7 @@ use Symfony\Component\HttpFoundation\Cookie;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use Gesdinet\JWTRefreshTokenBundle\Generator\RefreshTokenGeneratorInterface;
 use Gesdinet\JWTRefreshTokenBundle\Model\RefreshTokenManagerInterface;
+use Psr\Log\LoggerInterface;
 
 class GoogleAuthenticator extends OAuth2Authenticator
 {
@@ -29,7 +31,8 @@ class GoogleAuthenticator extends OAuth2Authenticator
         private EntityManagerInterface $em,
         private JWTTokenManagerInterface $jwtManager,
         private RefreshTokenGeneratorInterface $refreshTokenGenerator,
-        private RefreshTokenManagerInterface $refreshTokenManager
+        private RefreshTokenManagerInterface $refreshTokenManager,
+        private LoggerInterface $logger
     ) {}
 
     public function supports(Request $request): ?bool
@@ -40,17 +43,98 @@ class GoogleAuthenticator extends OAuth2Authenticator
     public function authenticate(Request $request): Passport
     {
         $client = $this->clientRegistry->getClient('google');
-        $accessToken = $this->fetchAccessToken($client);
 
-        /** @var GoogleUser $googleUser */
-        $googleUser = $client->fetchUserFromToken($accessToken);
+        // Debug: log incoming OAuth callback parameters (code, state, prompt etc.)
+        $this->logger->debug('Google OAuth callback params', [
+            'query' => $request->query->all(),
+            'route' => $request->attributes->get('_route')
+        ]);
+
+        try {
+            /** @var AccessTokenInterface $accessToken */
+            $accessToken = $this->fetchAccessToken($client);
+        } catch (\Throwable $e) {
+            // Fetching access token failed -> create AuthenticationException to trigger failure flow
+            $this->logger->error('Failed to fetch access token from Google', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw new AuthenticationException('Google OAuth: could not fetch access token.');
+        }
+
+        // Optional: if the library returns an array-like token, log its keys
+        try {
+            $tokenArray = method_exists($accessToken, 'jsonSerialize')
+                ? $accessToken->jsonSerialize()
+                : (is_array($accessToken) ? $accessToken : null);
+
+            if (is_array($tokenArray)) {
+                $this->logger->info('Google OAuth token received', [
+                    'keys' => array_keys($tokenArray),
+                    'has_access_token' => isset($tokenArray['access_token']),
+                    'has_refresh_token' => isset($tokenArray['refresh_token']),
+                    'expires' => $tokenArray['expires'] ?? null,
+                ]);
+            } else {
+                $this->logger->info('Google OAuth token received (non-array)', [
+                    'accessTokenClass' => \get_class($accessToken)
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('Could not inspect access token structure', [
+                'exception' => $e->getMessage()
+            ]);
+        }
+
+        try {
+            /** @var GoogleUser $googleUser */
+            $googleUser = $client->fetchUserFromToken($accessToken);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to fetch Google user from token', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw new AuthenticationException('Google OAuth: could not fetch user info.');
+        }
+
         $email = $googleUser->getEmail();
+        if (empty($email)) {
+            $this->logger->error('Google user has no email', [
+                'user' => method_exists($googleUser, 'toArray') ? $googleUser->toArray() : null
+            ]);
+            throw new AuthenticationException('Google OAuth: no email returned.');
+        }
 
         return new SelfValidatingPassport(
             new UserBadge($email, function (string $userIdentifier) use ($googleUser, $accessToken) {
+                // get full token array safely
+                $tokenArray = method_exists($accessToken, 'jsonSerialize')
+                    ? $accessToken->jsonSerialize()
+                    : (is_array($accessToken) ? $accessToken : []);
 
-                // vollständiges Token-Array speichern
-                $tokenArray = $accessToken->jsonSerialize();
+                // Ensure we have an array
+                if (!is_array($tokenArray)) {
+                    $this->logger->warning('Access token could not be converted to array, normalizing', [
+                        'accessTokenClass' => \get_class($accessToken)
+                    ]);
+                    $tokenArray = [];
+                }
+
+                // Very explicit logging for debugging later
+                $this->logger->debug('Processing token for user', [
+                    'email' => $userIdentifier,
+                    'token_keys' => array_keys($tokenArray)
+                ]);
+
+                // If refresh token is missing, bail out with an AuthenticationException
+                if (empty($tokenArray['refresh_token'])) {
+                    $this->logger->error('Missing refresh_token from Google OAuth', [
+                        'email' => $userIdentifier,
+                        'token_snapshot' => array_intersect_key($tokenArray, array_flip(['access_token','expires','scope','token_type','id_token']))
+                    ]);
+                    // Informative message so client can show a re-auth hint
+                    throw new AuthenticationException('Google OAuth did not provide a refresh token. Please re-authenticate with offline access and consent.');
+                }
 
                 $user = $this->userRepository->findOneBy(['email' => $userIdentifier]);
 
@@ -64,11 +148,32 @@ class GoogleAuthenticator extends OAuth2Authenticator
                 $user->setName($googleUser->getName());
                 $user->setAvatarUrl($googleUser->getAvatar());
 
-                // vollständiger Token wird gespeichert (JSON!)
+                // Store full token JSON and explicit refresh token + expires timestamp
                 $user->setGoogleAccessToken(json_encode($tokenArray));
+                $user->setGoogleRefreshToken($tokenArray['refresh_token']);
 
-                $this->em->persist($user);
-                $this->em->flush();
+                if (isset($tokenArray['expires']) && is_numeric($tokenArray['expires'])) {
+                    $user->setGoogleTokenExpiresAt(
+                        (new \DateTimeImmutable())->setTimestamp((int) $tokenArray['expires'])
+                    );
+                }
+
+                try {
+                    $this->em->persist($user);
+                    $this->em->flush();
+                } catch (\Throwable $e) {
+                    $this->logger->error('Could not persist user after Google OAuth', [
+                        'exception' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    throw new AuthenticationException('Could not store Google OAuth token.');
+                }
+
+                $this->logger->info('User OAuth token stored', [
+                    'userId' => $user->getId(),
+                    'email' => $user->getEmail(),
+                    'has_refresh_token' => isset($tokenArray['refresh_token'])
+                ]);
 
                 return $user;
             })
@@ -83,33 +188,39 @@ class GoogleAuthenticator extends OAuth2Authenticator
         $refreshToken = $this->refreshTokenGenerator->createForUserWithTtl($user, 604800);
         $this->refreshTokenManager->save($refreshToken);
 
-        $redirectUrl = 'http://127.0.0.1:3000/dashboard';
+        $response = new RedirectResponse('http://127.0.0.1:3000/dashboard');
 
-        $accessTokenCookie = Cookie::create('BEARER')
-            ->withValue($jwt)
-            ->withExpires(time() + 3600)
-            ->withPath('/')
-            ->withSecure(true)
-            ->withHttpOnly(true)
-            ->withSameSite(Cookie::SAMESITE_NONE);
+        $response->headers->setCookie(
+            Cookie::create('BEARER')
+                ->withValue($jwt)
+                ->withExpires(time() + 3600)
+                ->withPath('/')
+                ->withSecure(true)
+                ->withHttpOnly(true)
+                ->withSameSite(Cookie::SAMESITE_NONE)
+        );
 
-        $refreshTokenCookie = Cookie::create('refresh_token')
-            ->withValue($refreshToken->getRefreshToken())
-            ->withExpires(time() + 604800)
-            ->withPath('/')
-            ->withSecure(true)
-            ->withHttpOnly(true)
-            ->withSameSite(Cookie::SAMESITE_NONE);
-
-        $response = new RedirectResponse($redirectUrl);
-        $response->headers->setCookie($accessTokenCookie);
-        $response->headers->setCookie($refreshTokenCookie);
+        $response->headers->setCookie(
+            Cookie::create('refresh_token')
+                ->withValue($refreshToken->getRefreshToken())
+                ->withExpires(time() + 604800)
+                ->withPath('/')
+                ->withSecure(true)
+                ->withHttpOnly(true)
+                ->withSameSite(Cookie::SAMESITE_NONE)
+        );
 
         return $response;
     }
 
     public function onAuthenticationFailure(Request $request, AuthenticationException $exception): ?Response
     {
-        return new RedirectResponse('http://127.0.0.1:3000/login?error=oauth_failed');
+        $this->logger->error('Google OAuth failed', [
+            'error' => $exception->getMessage(),
+            'query' => $request->query->all()
+        ]);
+
+        // Redirect client to login with a hint to re-consent if needed
+        return new RedirectResponse('http://127.0.0.1:3000/login?error=oauth_failed&hint=reconsent');
     }
 }
