@@ -19,7 +19,7 @@ class CircuitBreakerService
     private const STATE_OPEN = 'open';        // Blocking requests
     private const STATE_HALF_OPEN = 'half_open'; // Testing recovery
     
-    private const DEFAULT_FAILURE_THRESHOLD = 25;
+    private const DEFAULT_FAILURE_THRESHOLD = 50;
     private const DEFAULT_TIMEOUT = 60; // seconds
     private const DEFAULT_SUCCESS_THRESHOLD = 2;
 

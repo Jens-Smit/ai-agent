@@ -1,0 +1,11 @@
+# config/services_gemini_sanitizer.yaml
+
+services:
+    # Gemini Schema Sanitizer - decorates the HTTP client used by Gemini platform
+    App\EventSubscriber\GeminiToolSchemaSanitizer:
+        decorates: 'http_client'
+        arguments:
+            $client: '@.inner'
+            $logger: '@logger'
+        tags:
+            - { name: 'monolog.logger', channel: 'gemini_sanitizer' }

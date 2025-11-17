@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "dd91f086043f599b80021611ce3e7a48",
+    "content-hash": "54b95bf7868c86c6818994a5c7b701ab",
     "packages": [
         {
             "name": "codewithkyrian/chromadb-php",

@@ -8,17 +8,33 @@ import {
   CircularProgress,
   Alert,
   Chip,
-  Divider,
   Card,
   CardContent,
+  LinearProgress,
+  List,
+  ListItem,
+  ListItemText,
+  IconButton,
+  Collapse
 } from '@mui/material';
-import { Send, SmartToy, Person, Code } from '@mui/icons-material';
-import { callPersonalAssistant, callDevAgent, callFrontendDevAgent } from '../api/agent';
+import { 
+  Send, 
+  SmartToy, 
+  Person, 
+  Code,
+  ExpandMore,
+  ExpandLess,
+  CheckCircle,
+  Error as ErrorIcon
+} from '@mui/icons-material';
+import { 
+  callPersonalAssistant, 
+  callDevAgent, 
+  callFrontendDevAgent 
+} from '../api/agent';
+import { useAgentStatus } from '../hooks/useAgentStatus';
 import { getErrorMessage } from '../api/client';
 
-/**
- * Agent Configuration
- */
 const AGENT_CONFIG = {
   personal: {
     title: 'Personal Assistant',
@@ -41,6 +57,77 @@ const AGENT_CONFIG = {
     apiCall: callFrontendDevAgent,
     color: 'success',
   },
+};
+
+/**
+ * Status Monitor Component
+ */
+const StatusMonitor = ({ sessionId }) => {
+  const { statuses, completed, result, error, isPolling } = useAgentStatus(sessionId);
+  const [expanded, setExpanded] = useState(true);
+
+  if (!sessionId) return null;
+
+  return (
+    <Card sx={{ mb: 2, bgcolor: 'grey.50' }}>
+      <CardContent>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Typography variant="h6">
+            Agent Status Monitor
+          </Typography>
+          <IconButton onClick={() => setExpanded(!expanded)} size="small">
+            {expanded ? <ExpandLess /> : <ExpandMore />}
+          </IconButton>
+        </Box>
+        
+        <Typography variant="caption" color="text.secondary" display="block">
+          Session: {sessionId}
+        </Typography>
+        
+        {isPolling && !completed && (
+          <LinearProgress sx={{ mt: 2, mb: 1 }} />
+        )}
+
+        <Collapse in={expanded}>
+          <List sx={{ maxHeight: 300, overflow: 'auto', mt: 2 }}>
+            {statuses.map((status, index) => (
+              <ListItem 
+                key={index}
+                sx={{ 
+                  py: 0.5,
+                  borderLeft: '3px solid',
+                  borderColor: 'primary.main',
+                  mb: 0.5,
+                  bgcolor: 'background.paper'
+                }}
+              >
+                <ListItemText
+                  primary={status.message}
+                  secondary={new Date(status.timestamp).toLocaleString('de-DE')}
+                  primaryTypographyProps={{ variant: 'body2' }}
+                  secondaryTypographyProps={{ variant: 'caption' }}
+                />
+              </ListItem>
+            ))}
+          </List>
+        </Collapse>
+
+        {completed && (
+          <Box sx={{ mt: 2 }}>
+            {error ? (
+              <Alert severity="error" icon={<ErrorIcon />}>
+                {error}
+              </Alert>
+            ) : (
+              <Alert severity="success" icon={<CheckCircle />}>
+                Agent completed successfully
+              </Alert>
+            )}
+          </Box>
+        )}
+      </CardContent>
+    </Card>
+  );
 };
 
 /**
@@ -71,17 +158,10 @@ const Message = ({ message, isUser }) => (
         <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
           {message.text}
         </Typography>
-        {message.metadata && (
-          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-            <Typography variant="caption" display="block">
-              Token Usage: {message.metadata.token_usage || 'N/A'}
-            </Typography>
-            {message.metadata.files_created && (
-              <Typography variant="caption" display="block">
-                Files: {message.metadata.files_created.join(', ')}
-              </Typography>
-            )}
-          </Box>
+        {message.sessionId && (
+          <Typography variant="caption" display="block" sx={{ mt: 1, opacity: 0.7 }}>
+            Session: {message.sessionId}
+          </Typography>
         )}
       </CardContent>
     </Card>
@@ -89,7 +169,7 @@ const Message = ({ message, isUser }) => (
 );
 
 /**
- * Agent Page Component
+ * Main Agent Page Component
  */
 const AgentPage = ({ agentType = 'personal' }) => {
   const config = AGENT_CONFIG[agentType];
@@ -97,6 +177,7 @@ const AgentPage = ({ agentType = 'personal' }) => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -117,39 +198,42 @@ const AgentPage = ({ agentType = 'personal' }) => {
     };
 
     setMessages((prev) => [...prev, userMessage]);
+    const currentInput = input;
     setInput('');
     setError(null);
     setLoading(true);
+    setCurrentSessionId(null);
 
     try {
-      const response = await config.apiCall(input);
+      const response = await config.apiCall(currentInput);
 
-      const agentMessage = {
-        text: response.response || response.ai_response || 'Keine Antwort erhalten',
-        isUser: false,
-        timestamp: new Date(),
-        metadata: {
-          token_usage: response.metadata?.token_usage,
-          files_created: response.files_created,
-          deployment_instructions: response.deployment_instructions,
-        },
-      };
-
-      setMessages((prev) => [...prev, agentMessage]);
-
-      // Show deployment instructions if available
-      if (response.deployment_instructions) {
-        const deployMessage = {
-          text: `📦 Deployment Instructions:\n\n${response.deployment_instructions}`,
+      // Backend gibt jetzt sessionId zurück
+      if (response.sessionId) {
+        setCurrentSessionId(response.sessionId);
+        
+        const agentMessage = {
+          text: response.message || 'Agent job gestartet. Status-Updates werden angezeigt.',
+          isUser: false,
+          timestamp: new Date(),
+          sessionId: response.sessionId,
+        };
+        
+        setMessages((prev) => [...prev, agentMessage]);
+      } else {
+        // Fallback für alte Response-Format
+        const agentMessage = {
+          text: response.response || response.ai_response || 'Keine Antwort erhalten',
           isUser: false,
           timestamp: new Date(),
         };
-        setMessages((prev) => [...prev, deployMessage]);
+        setMessages((prev) => [...prev, agentMessage]);
       }
     } catch (err) {
-      setError(getErrorMessage(err));
+      const errorMsg = getErrorMessage(err);
+      setError(errorMsg);
+      
       const errorMessage = {
-        text: `Fehler: ${getErrorMessage(err)}`,
+        text: `Fehler: ${errorMsg}`,
         isUser: false,
         timestamp: new Date(),
       };
@@ -196,10 +280,13 @@ const AgentPage = ({ agentType = 'personal' }) => {
         </Alert>
       )}
 
+      {/* Status Monitor */}
+      {currentSessionId && <StatusMonitor sessionId={currentSessionId} />}
+
       {/* Chat Messages */}
       <Paper
         sx={{
-          height: 'calc(100vh - 400px)',
+          height: 'calc(100vh - 500px)',
           minHeight: '400px',
           overflowY: 'auto',
           p: 3,
@@ -235,7 +322,7 @@ const AgentPage = ({ agentType = 'personal' }) => {
               <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
                 <CircularProgress size={24} sx={{ mr: 2 }} />
                 <Typography variant="body2" color="text.secondary">
-                  Agent antwortet...
+                  Agent wird gestartet...
                 </Typography>
               </Box>
             )}
@@ -273,7 +360,7 @@ const AgentPage = ({ agentType = 'personal' }) => {
         </Box>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
           {agentType === 'dev' || agentType === 'frontend'
-            ? '⚠️ Code-Generierung kann mehrere Minuten dauern'
+            ? '⚠️ Code-Generierung läuft asynchron - Status-Updates werden live angezeigt'
             : 'Drücke Enter zum Senden, Shift+Enter für neue Zeile'}
         </Typography>
       </Paper>

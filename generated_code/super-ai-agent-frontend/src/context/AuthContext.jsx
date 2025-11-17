@@ -20,41 +20,40 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   /**
-   * Prüft ob Benutzer authentifiziert ist
+   * Prüft ob Benutzer authentifiziert ist (via Cookies)
    */
   const checkAuth = async () => {
-    const token = localStorage.getItem('access_token'); // oder Cookie
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
-
     try {
       setLoading(true);
+      
+      // ✅ API-Call macht automatisch withCredentials=true
+      // und sendet BEARER Cookie mit
       const data = await getCurrentUser();
-      setUser(data.user);
+      setUser(data.user || data); // Handle verschiedene Response-Formate
+      setError(null);
     } catch (err) {
+      console.log('Auth check failed:', err.message);
       setUser(null);
+      setError(null); // Kein Error bei fehlender Auth
     } finally {
       setLoading(false);
     }
   };
-
 
   /**
    * Setzt Benutzer nach erfolgreichem Login
    */
   const loginUser = (userData) => {
     setUser(userData);
+    setError(null);
   };
 
   /**
    * Entfernt Benutzer nach Logout
    */
   const logoutUser = () => {
-    localStorage.removeItem('access_token');
     setUser(null);
+    setError(null);
     setLoading(false);
   };
 

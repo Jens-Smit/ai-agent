@@ -87,9 +87,20 @@ services:
     App\Tool\AnalyzeCodeTool:
         autowire: true
         autoconfigure: true
-        public: false   
-  
-
+        public: false  
+    # ReceiveMailTool 
+    App\Tool\ReceiveMailTool:
+        arguments:
+            $logger: '@logger'
+            $entityManager: '@doctrine.orm.entity_manager'
+        tags: ['ai.tool']
+    # SendMailTool
+    App\Tool\SendMailTool:
+        arguments:
+            $logger: '@logger'
+            $entityManager: '@doctrine.orm.entity_manager'
+            $mailer: '@mailer' # Der Standard-Mailer wird hier übergeben, aber im Tool überschrieben
+        tags: ['ai.tool']
  
     # SandboxExecutorTool
     App\Tool\SandboxExecutorTool:

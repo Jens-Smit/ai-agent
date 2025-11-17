@@ -1,7 +1,4 @@
 <?php
-
-declare(strict_types=1);
-
 namespace App\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
@@ -72,6 +69,9 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
      */
     #[ORM\Column(type: 'datetime', nullable: true)]
     private ?\DateTimeInterface $resetTokenExpiresAt = null;
+
+    #[ORM\OneToOne(mappedBy: 'user', targetEntity: UserSettings::class, cascade: ['persist', 'remove'])]
+    private ?UserSettings $userSettings = null;
 
     // ==================== BASIC GETTERS/SETTERS ====================
 
@@ -325,6 +325,23 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
         $this->resetToken = null;
         $this->resetTokenHash = null;
         $this->resetTokenExpiresAt = null;
+        return $this;
+    }
+
+    public function getUserSettings(): ?UserSettings
+    {
+        return $this->userSettings;
+    }
+
+    public function setUserSettings(?UserSettings $userSettings): self
+    {
+        // set the owning side of the relation if necessary
+        if ($userSettings !== null && $userSettings->getUser() !== $this) {
+            $userSettings->setUser($this);
+        }
+
+        $this->userSettings = $userSettings;
+
         return $this;
     }
 }

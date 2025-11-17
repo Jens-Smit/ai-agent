@@ -5,43 +5,39 @@ declare(strict_types=1);
 namespace App\Tool;
 
 use Symfony\AI\Agent\Toolbox\Attribute\AsTool;
-use Symfony\AI\Platform\Contract\JsonSchema\Attribute\With;
 use Psr\Log\LoggerInterface;
 use App\Entity\User;
 use Google\Service\Calendar;
 use Google\Service\Calendar\Event;
 use Symfony\Bundle\SecurityBundle\Security;
-use App\Service\GoogleClientService; // Import the new service
+use App\Service\GoogleClientService;
 
 #[AsTool(
     name: 'google_calendar_create_event',
-    description: 'Creates a new event in the Google Calendar of the currently authenticated user. Requires title, start time, and end time. Optional: description, location.'
+    description: 'Creates a new event in the Google Calendar of the currently authenticated user. Requires title, start time, and end time in ISO 8601 format (YYYY-MM-DDTHH:MM:SS). Optional: description, location. IMPORTANT: User must be authenticated with Google OAuth first!'
 )]
 final class GoogleCalendarCreateEventTool
 {
     public function __construct(
         private LoggerInterface $logger,
         private Security $security,
-        private GoogleClientService $googleClientService, // Use the new service
+        private GoogleClientService $googleClientService,
     ) {}
 
     /**
      * @param string $title The title of the calendar event.
-     * @param string $startTime The start time of the event in 'YYYY-MM-DDTHH:MM:SS' format (e.g., '2024-12-31T10:00:00').
-     * @param string $endTime The end time of the event in 'YYYY-MM-DDTHH:MM:SS' format (e.g., '2024-12-31T11:00:00').
-     * @param string|null $description An optional description for the event.
-     * @param string|null $location An optional location for the event.
+     * @param string $startTime The start time in ISO 8601 format (e.g., '2024-12-31T10:00:00').
+     * @param string $endTime The end time in ISO 8601 format (e.g., '2024-12-31T11:00:00').
+     * @param string $description An optional description for the event (empty string if not provided).
+     * @param string $location An optional location for the event (empty string if not provided).
      * @return array Returns an array with status and event details if successful, or an error message.
      */
     public function __invoke(
-    
         string $title,
-        #[With(pattern: '/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$/')]
         string $startTime,
-        #[With(pattern: '/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$/')]
         string $endTime,
-        string|null $description = null,
-        string|null $location = null
+        string $description = '',
+        string $location = ''
     ): array {
         $this->logger->info('GoogleCalendarCreateEventTool execution started', [
             'title' => $title,
@@ -52,26 +48,88 @@ final class GoogleCalendarCreateEventTool
         try {
             /** @var User|null $user */
             $user = $this->security->getUser();
-
+            
             if (!$user instanceof User) {
-                return ['status' => 'error', 'message' => 'No authenticated user found.'];
+                $this->logger->error('No authenticated user found');
+                return [
+                    'status' => 'error',
+                    'message' => 'No authenticated user found. Please log in first.',
+                    'action_required' => 'login'
+                ];
             }
+
+            // ✅ CHECK: Hat der User Google OAuth Tokens?
+            if ($user->getGoogleAccessToken() === null || $user->getGoogleRefreshToken() === null) {
+                $this->logger->warning('User has no Google OAuth tokens', [
+                    'userId' => $user->getId(),
+                    'email' => $user->getEmail()
+                ]);
+                
+                return [
+                    'status' => 'error',
+                    'message' => 'Google Calendar is not connected. Please connect your Google account first by visiting /connect/google',
+                    'action_required' => 'google_auth',
+                    'auth_url' => '/connect/google'
+                ];
+            }
+
+            // Format datetime strings to RFC3339 (what Google Calendar expects)
+            $formattedStart = $this->formatDateTimeForGoogle($startTime);
+            $formattedEnd = $this->formatDateTimeForGoogle($endTime);
+
+            if ($formattedStart === null || $formattedEnd === null) {
+                $this->logger->error('Invalid datetime format', [
+                    'startTime' => $startTime,
+                    'endTime' => $endTime
+                ]);
+                return [
+                    'status' => 'error',
+                    'message' => sprintf(
+                        'Invalid datetime format. Received startTime: "%s", endTime: "%s". Expected format: YYYY-MM-DDTHH:MM:SS',
+                        $startTime,
+                        $endTime
+                    )
+                ];
+            }
+
+            $this->logger->info('Formatted datetime for Google Calendar', [
+                'formattedStart' => $formattedStart,
+                'formattedEnd' => $formattedEnd
+            ]);
 
             $client = $this->googleClientService->getClientForUser($user);
             $service = new Calendar($client);
 
-            $event = new Event([
+            // Build event data
+            $eventData = [
                 'summary' => $title,
-                'description' => $description,
-                'location' => $location,
-                'start' => ['dateTime' => $startTime, 'timeZone' => 'Europe/Berlin'],
-                'end' => ['dateTime' => $endTime, 'timeZone' => 'Europe/Berlin'],
+                'start' => [
+                    'dateTime' => $formattedStart,
+                    'timeZone' => 'Europe/Berlin'
+                ],
+                'end' => [
+                    'dateTime' => $formattedEnd,
+                    'timeZone' => 'Europe/Berlin'
+                ]
+            ];
+
+            // Only add optional fields if not empty
+            if (!empty($description)) {
+                $eventData['description'] = $description;
+            }
+
+            if (!empty($location)) {
+                $eventData['location'] = $location;
+            }
+
+            $this->logger->debug('Creating Google Calendar event', ['eventData' => $eventData]);
+
+            $event = new Event($eventData);
+            $createdEvent = $service->events->insert('primary', $event);
+
+            $this->logger->info('Google Calendar event created successfully', [
+                'eventId' => $createdEvent->getId()
             ]);
-
-            $calendarId = 'primary'; // Use the primary calendar of the user
-            $createdEvent = $service->events->insert($calendarId, $event);
-
-            $this->logger->info('Google Calendar event created successfully.', ['eventId' => $createdEvent->getId()]);
 
             return [
                 'status' => 'success',
@@ -81,15 +139,97 @@ final class GoogleCalendarCreateEventTool
                 'start' => $createdEvent->getStart()->getDateTime(),
                 'end' => $createdEvent->getEnd()->getDateTime(),
             ];
+
         } catch (\Google\Service\Exception $e) {
-            $this->logger->error('Google Calendar API error: ' . $e->getMessage(), ['error' => $e->getErrors()]);
-            return ['status' => 'error', 'message' => 'Google Calendar API error: ' . $e->getMessage()];
-        } catch (\RuntimeException $e) { // Catch exceptions from GoogleClientService
-            $this->logger->error('Google Client Service error: ' . $e->getMessage(), ['error' => $e->getMessage()]);
-            return ['status' => 'error', 'message' => 'Authentication error: ' . $e->getMessage()];
+            $this->logger->error('Google Calendar API error', [
+                'message' => $e->getMessage(),
+                'errors' => $e->getErrors()
+            ]);
+            return [
+                'status' => 'error',
+                'message' => 'Google Calendar API error: ' . $e->getMessage()
+            ];
+        } catch (\RuntimeException $e) {
+            $this->logger->error('Google Client Service error', [
+                'message' => $e->getMessage()
+            ]);
+            
+            // Check if it's an auth error
+            if (str_contains($e->getMessage(), 'Please re-authenticate')) {
+                return [
+                    'status' => 'error',
+                    'message' => 'Google authentication expired. Please reconnect your Google account at /connect/google',
+                    'action_required' => 'google_reauth',
+                    'auth_url' => '/connect/google'
+                ];
+            }
+            
+            return [
+                'status' => 'error',
+                'message' => 'Authentication error: ' . $e->getMessage()
+            ];
         } catch (\Exception $e) {
-            $this->logger->error('Tool failed with unexpected error', ['error' => $e->getMessage()]);
-            return ['status' => 'error', 'message' => $e->getMessage()];
+            $this->logger->error('Unexpected error in GoogleCalendarCreateEventTool', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return [
+                'status' => 'error',
+                'message' => 'Unexpected error: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Format datetime string to RFC3339 format required by Google Calendar API
+     * 
+     * Accepts various input formats and converts to RFC3339 with timezone
+     * Examples:
+     * - "2025-11-17T12:15:00" -> "2025-11-17T12:15:00+01:00"
+     * - "2025-11-17 12:15:00" -> "2025-11-17T12:15:00+01:00"
+     * 
+     * @param string $datetime
+     * @return string|null RFC3339 formatted datetime or null if invalid
+     */
+    private function formatDateTimeForGoogle(string $datetime): ?string
+    {
+        try {
+            // Create DateTimeImmutable with Europe/Berlin timezone
+            $tz = new \DateTimeZone('Europe/Berlin');
+            
+            // Try to parse the input datetime
+            $dt = null;
+            
+            // Try common formats
+            $formats = [
+                'Y-m-d\TH:i:s',      // 2025-11-17T12:15:00
+                'Y-m-d H:i:s',       // 2025-11-17 12:15:00
+                'Y-m-d\TH:i',        // 2025-11-17T12:15
+                'Y-m-d H:i',         // 2025-11-17 12:15
+            ];
+
+            foreach ($formats as $format) {
+                $parsed = \DateTimeImmutable::createFromFormat($format, $datetime, $tz);
+                if ($parsed !== false) {
+                    $dt = $parsed;
+                    break;
+                }
+            }
+
+            // Fallback: try to create from string directly
+            if ($dt === null) {
+                $dt = new \DateTimeImmutable($datetime, $tz);
+            }
+
+            // Format to RFC3339 (e.g., "2025-11-17T12:15:00+01:00")
+            return $dt->format(\DateTime::RFC3339);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to format datetime', [
+                'datetime' => $datetime,
+                'error' => $e->getMessage()
+            ]);
+            return null;
         }
     }
 }

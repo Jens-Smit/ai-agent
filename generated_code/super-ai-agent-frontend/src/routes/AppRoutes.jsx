@@ -8,7 +8,7 @@ import DashboardPage from '../pages/DashboardPage';
 import ProfilePage from '../pages/ProfilePage';
 import AgentPage from '../pages/AgentPage';
 import PasswordResetPage from '../pages/PasswordResetPage';
-import GoogleCallbackPage from '../pages/GoogleCallbackPage';
+
 import { CircularProgress, Box } from '@mui/material';
 
 /**
@@ -76,10 +76,7 @@ const AppRoutes = () => {
           </PublicRoute>
         }
       />
-      <Route
-        path="/connect/google/check"
-        element={<GoogleCallbackPage />}
-      />
+      
 
       {/* Protected Routes */}
       <Route

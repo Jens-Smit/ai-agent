@@ -34,7 +34,6 @@ class GoogleAuthenticator extends OAuth2Authenticator
 
     public function supports(Request $request): ?bool
     {
-        // Route der Callback-URL
         return $request->attributes->get('_route') === 'connect_google_check';
     }
 
@@ -42,36 +41,31 @@ class GoogleAuthenticator extends OAuth2Authenticator
     {
         $client = $this->clientRegistry->getClient('google');
         $accessToken = $this->fetchAccessToken($client);
-        
+
         /** @var GoogleUser $googleUser */
         $googleUser = $client->fetchUserFromToken($accessToken);
         $email = $googleUser->getEmail();
 
         return new SelfValidatingPassport(
             new UserBadge($email, function (string $userIdentifier) use ($googleUser, $accessToken) {
+
+                // vollständiges Token-Array speichern
+                $tokenArray = $accessToken->jsonSerialize();
+
                 $user = $this->userRepository->findOneBy(['email' => $userIdentifier]);
-                
+
                 if (!$user) {
                     $user = new User();
                     $user->setEmail($googleUser->getEmail());
                     $user->setRoles(['ROLE_USER']);
                 }
 
-                // Google-spezifische Felder speichern
                 $user->setGoogleId($googleUser->getId());
                 $user->setName($googleUser->getName());
                 $user->setAvatarUrl($googleUser->getAvatar());
 
-                // Token speichern
-                $user->setGoogleAccessToken($accessToken->getToken());
-                if ($accessToken->getRefreshToken()) {
-                    $user->setGoogleRefreshToken($accessToken->getRefreshToken());
-                }
-                if ($accessToken->getExpires()) {
-                    $user->setGoogleTokenExpiresAt(
-                        (new \DateTimeImmutable())->setTimestamp($accessToken->getExpires())
-                    );
-                }
+                // vollständiger Token wird gespeichert (JSON!)
+                $user->setGoogleAccessToken(json_encode($tokenArray));
 
                 $this->em->persist($user);
                 $this->em->flush();
@@ -84,38 +78,29 @@ class GoogleAuthenticator extends OAuth2Authenticator
     public function onAuthenticationSuccess(Request $request, TokenInterface $token, string $firewallName): ?Response
     {
         $user = $token->getUser();
-        
-        // ✅ JWT Access Token erstellen
+
         $jwt = $this->jwtManager->create($user);
-        
-        // ✅ Refresh Token erstellen (7 Tage)
         $refreshToken = $this->refreshTokenGenerator->createForUserWithTtl($user, 604800);
         $this->refreshTokenManager->save($refreshToken);
 
-        // ✅ Redirect URL (zu deinem Frontend Dashboard)
         $redirectUrl = 'http://127.0.0.1:3000/dashboard';
-        
-        // ✅ Access Token Cookie (1 Stunde)
+
         $accessTokenCookie = Cookie::create('BEARER')
             ->withValue($jwt)
             ->withExpires(time() + 3600)
             ->withPath('/')
             ->withSecure(true)
             ->withHttpOnly(true)
-            // KORREKTUR: Notwendig für Cross-Origin (unterschiedliche Ports)
-            ->withSameSite(Cookie::SAMESITE_NONE); 
-        
-        // ✅ Refresh Token Cookie (7 Tage)
+            ->withSameSite(Cookie::SAMESITE_NONE);
+
         $refreshTokenCookie = Cookie::create('refresh_token')
             ->withValue($refreshToken->getRefreshToken())
             ->withExpires(time() + 604800)
             ->withPath('/')
             ->withSecure(true)
             ->withHttpOnly(true)
-            // KORREKTUR: Notwendig für Cross-Origin (unterschiedliche Ports)
-            ->withSameSite(Cookie::SAMESITE_NONE); 
-        
-        // Cookies zum Response hinzufügen
+            ->withSameSite(Cookie::SAMESITE_NONE);
+
         $response = new RedirectResponse($redirectUrl);
         $response->headers->setCookie($accessTokenCookie);
         $response->headers->setCookie($refreshTokenCookie);

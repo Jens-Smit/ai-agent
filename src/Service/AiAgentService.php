@@ -41,24 +41,16 @@ class AiAgentService
      * Run prompt. Non-blocking retry approach: re-dispatches job with DelayStamp on transient errors.
      * If $sessionId is null a new UUID is generated.
      */
-    public function runPrompt(string $prompt, ?string $sessionId = null, int $attempt = 1): void
+   public function runPrompt(string $prompt, ?string $sessionId = null, int $attempt = 1): void
     {
         $sessionId = $sessionId ?: Uuid::v4()->toRfc4122();
 
-        // start / heartbeat
+        // Start / heartbeat
         if ($attempt === 1) {
             $this->agentStatusService->clearStatuses($sessionId);
             $this->agentStatusService->addStatus($sessionId, 'Job gestartet für Prompt.');
         } else {
             $this->agentStatusService->addStatus($sessionId, sprintf('Job requeued (Attempt %d).', $attempt));
-        }
-
-        // Note: $startTime kept in case you want to extend to global retry window across dispatches
-        $startTime = time();
-        if ((time() - $startTime) > self::MAX_TOTAL_SECONDS) {
-            $this->agentStatusService->addStatus($sessionId, 'Maximale Gesamtlaufzeit für Retries überschritten.');
-            $this->logger->error('Max total retry time exceeded', ['session' => $sessionId]);
-            return;
         }
 
         $messages = new MessageBag(Message::ofUser($prompt));
@@ -69,7 +61,7 @@ class AiAgentService
                 $status = $this->circuitBreaker->getStatus(self::CIRCUIT_BREAKER_SERVICE);
                 $this->agentStatusService->addStatus(
                     $sessionId,
-                    sprintf('Circuit Breaker OPEN - Service temporär blockiert (Failures: %d)', $status['failure_count'])
+                    sprintf('Circuit Breaker OPEN - Service blockiert (Failures: %d)', $status['failure_count'])
                 );
                 $this->logger->warning('Circuit breaker prevented request', [
                     'service' => self::CIRCUIT_BREAKER_SERVICE,
@@ -86,21 +78,19 @@ class AiAgentService
                 $this->circuitBreaker->recordSuccess(self::CIRCUIT_BREAKER_SERVICE);
             }
 
-            // Try to extract content safely
             $content = $this->extractContentSafely($result);
-
-            // If empty, treat as transient
             if ($content === '') {
                 throw new \RuntimeException('Response does not contain any content.');
             }
 
-            // Success: persist RESULT and attempt deployment
             $this->agentStatusService->addStatus($sessionId, 'RESULT: ' . $this->shortPreview($content, 300));
-            $this->logger->info('Agent erfolgreich ausgeführt', ['session' => $sessionId, 'preview' => $this->shortPreview($content, 200)]);
+            $this->logger->info('Agent erfolgreich ausgeführt', [
+                'session' => $sessionId,
+                'preview' => $this->shortPreview($content, 200)
+            ]);
 
-            // Attempt deployment, mark DEPLOYMENT outcome
+            // Optional: Deployment
             try {
-                // Falls du deploy nutzen willst, entkommentieren
                 // $this->deployTool->deployFromString($content);
                 $this->agentStatusService->addStatus($sessionId, 'DEPLOYMENT: success');
             } catch (Throwable $e) {
@@ -109,24 +99,28 @@ class AiAgentService
             }
 
             return;
+
         } catch (Throwable $e) {
             $errorMessage = $e->getMessage() ?? get_class($e);
-
-            // Best-effort raw extraction from exception or result
             $rawResponse = $this->tryExtractRawFromException($e) ?? '';
 
-            // Persist failed payload for post-mortem (always record)
             $this->persistFailedPayload($sessionId, $prompt, $rawResponse, $errorMessage, $attempt);
 
             $isRetriable = $this->isTransientError($e);
 
-            // Circuit Breaker Update bei Fehler (nur für retriable)
+            // Circuit Breaker Update bei Fehler
             if ($this->circuitBreaker && $isRetriable) {
                 $this->circuitBreaker->recordFailure(self::CIRCUIT_BREAKER_SERVICE);
             }
 
+            // Rate-Limit Check: Retry-After falls vorhanden
+            $backoff = $this->computeBackoff($attempt);
+            if ($e instanceof HttpExceptionInterface && $e->getResponse()->getStatusCode() === 429) {
+                $retryAfter = (int)($e->getResponse()->getHeaders()['retry-after'][0] ?? $backoff);
+                $backoff = max($backoff, $retryAfter);
+            }
+
             if ($isRetriable && $attempt < self::MAX_RETRIES) {
-                $backoff = $this->computeBackoff($attempt);
                 $this->agentStatusService->addStatus($sessionId, sprintf(
                     'Transient issue: %s. Neuer Versuch in %d s (Attempt %d).',
                     $this->shortPreview($errorMessage, 140),
@@ -141,19 +135,15 @@ class AiAgentService
                     'err' => $errorMessage,
                 ]);
 
-                // Re-dispatch job with increased attempt and DelayStamp (milliseconds)
                 $newMessage = new AiAgentJob(
                     $prompt,
                     $sessionId,
-                    [
-                        'attempt' => $attempt + 1
-                    ]
+                    ['attempt' => $attempt + 1]
                 );
                 $this->bus->dispatch($newMessage, [new DelayStamp($backoff * 1000)]);
                 return;
             }
 
-            // Non-retriable or max attempts reached: mark ERROR and stop
             $this->agentStatusService->addStatus($sessionId, 'ERROR: ' . $this->shortPreview($errorMessage, 300));
             $this->logger->error('AiAgentService unrecoverable error', [
                 'session' => $sessionId,
@@ -161,10 +151,9 @@ class AiAgentService
                 'err' => $errorMessage,
                 'trace' => $e->getTraceAsString()
             ]);
-
-            return;
         }
     }
+
 
     private function computeBackoff(int $attempt): int
     {

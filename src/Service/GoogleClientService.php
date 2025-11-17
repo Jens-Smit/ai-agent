@@ -8,7 +8,7 @@ use App\Entity\User;
 use Doctrine\ORM\EntityManagerInterface;
 use Google\Client;
 use Google\Service\Gmail;
-use Google\Service\Calendar; // Hinzugefügt, da es im Controller verwendet wird, falls nötig.
+use Google\Service\Calendar;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 
@@ -22,66 +22,66 @@ class GoogleClientService
         private readonly UrlGeneratorInterface $router,
         private readonly string $googleClientId,
         private readonly string $googleClientSecret,
-        private readonly string $frontendUrl // Wird für die Umleitungs-URI verwendet
+        private readonly string $frontendUrl
     ) {
         $this->googleClient = new Client();
         $this->googleClient->setClientId($this->googleClientId);
         $this->googleClient->setClientSecret($this->googleClientSecret);
-       
 
-        // Die Redirect URI muss genau mit der in der Google Console übereinstimmen.
-        // Hier wird sie dynamisch aus der frontendUrl und der Route generiert.
-        $this->googleClient->setRedirectUri($this->frontendUrl . $this->router->generate('connect_google_check'));
-        
-        // Hinzufügen der erforderlichen Scopes
+        $this->googleClient->setRedirectUri(
+            $this->frontendUrl . $this->router->generate('connect_google_check')
+        );
+
         $this->googleClient->addScope([
             Gmail::GMAIL_SEND,
-            Calendar::CALENDAR, // Beispiel: falls der Kalender auch benötigt wird
+            Calendar::CALENDAR,
             'profile',
             'email'
         ]);
+
         $this->googleClient->setAccessType('offline');
-        $this->googleClient->setPrompt('consent'); // Erfordert Zustimmung, um Refresh-Token zu erhalten
+        $this->googleClient->setPrompt('consent');
     }
 
     public function getClientForUser(User $user): Client
     {
-        $accessToken = $user->getGoogleAccessToken();
-        $refreshToken = $user->getGoogleRefreshToken();
+        $rawToken = $user->getGoogleAccessToken();
 
-        if (!$accessToken || !$refreshToken) {
-            $this->logger->error('Google OAuth tokens not found for user.', ['user_id' => $user->getId()]);
-            throw new \RuntimeException('Google OAuth tokens not found for user. Please re-authenticate.');
+        if (!$rawToken) {
+            throw new \RuntimeException('Google OAuth token missing. Please re-authenticate.');
         }
 
-        $this->googleClient->setAccessToken(json_decode($accessToken, true)); // Access Token als Array setzen
+        // komplettes Token aus DB
+        $token = json_decode($rawToken, true);
 
-        // Prüfen, ob der Access Token abgelaufen ist
+        if (!is_array($token)) {
+            throw new \RuntimeException('Invalid Google token format.');
+        }
+
+        $this->googleClient->setAccessToken($token);
+
         if ($this->googleClient->isAccessTokenExpired()) {
-            $this->logger->info('Google access token expired, attempting to refresh.', ['user_id' => $user->getId()]);
-            try {
-                $this->googleClient->fetchAccessTokenWithRefreshToken($refreshToken);
-                $newAccessToken = $this->googleClient->getAccessToken();
-                
-                // Speichere den neuen Access Token (und ggf. einen neuen Refresh Token)
-                $user->setGoogleAccessToken(json_encode($newAccessToken));
-                if (isset($newAccessToken['refresh_token'])) {
-                    $user->setGoogleRefreshToken($newAccessToken['refresh_token']);
-                }
-                $this->entityManager->flush();
-                $this->logger->info('Google access token refreshed and saved for user.', ['user_id' => $user->getId()]);
-            } catch (\Exception $e) {
-                $this->logger->error('Failed to refresh Google access token: ' . $e->getMessage(), ['user_id' => $user->getId(), 'exception' => $e]);
-                throw new \RuntimeException('Failed to refresh Google access token. Please re-authenticate.', 0, $e);
+            $this->logger->info('Refreshing expired Google token.');
+
+            $refreshed = $this->googleClient->fetchAccessTokenWithRefreshToken();
+
+            if (!empty($refreshed['error'])) {
+                throw new \RuntimeException('Token refresh failed: ' . $refreshed['error']);
             }
+
+            // Token zusammenführen
+            $updatedToken = array_merge($token, $refreshed);
+
+            // speichern
+            $user->setGoogleAccessToken(json_encode($updatedToken));
+            $this->entityManager->flush();
+
+            $this->googleClient->setAccessToken($updatedToken);
         }
 
         return $this->googleClient;
     }
 
-    /**
-     * Returns the URL to initiate the Google OAuth consent screen.
-     */
     public function getAuthUrl(): string
     {
         return $this->googleClient->createAuthUrl();
