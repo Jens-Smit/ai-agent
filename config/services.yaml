@@ -180,6 +180,11 @@ services:
             $userRepository: '@App\Repository\UserRepository'
             $googleClientService: '@App\Service\GoogleClientService'
         tags: ['ai.tool']        
-                     
+    # JobSearchTool
+    App\Tool\JobSearchTool:
+        arguments:
+            $httpClient: '@http_client'
+            $logger: '@logger'
+        tags: ['ai.tool']
             
         

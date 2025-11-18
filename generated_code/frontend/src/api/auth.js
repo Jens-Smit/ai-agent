@@ -55,7 +55,7 @@ export const updateUserProfile = async (userData) => {
 
 // Google OAuth Start
 export const getGoogleOAuthUrl = () => {
-  return `${backendUrl}/connect/google`;
+  return `${backendUrl}/api/connect/google`;
 };
 
 export default apiClient;

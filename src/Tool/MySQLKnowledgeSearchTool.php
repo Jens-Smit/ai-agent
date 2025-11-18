@@ -54,7 +54,7 @@ final class MySQLKnowledgeSearchTool
             $queryEmbedding = $vectors[0]->getData();
 
             // 2. Suche ähnliche Dokumente in MySQL
-            $results = $this->knowledgeRepo->findSimilar(
+            $results = $this->knowledgeRepo->findSimilarFixed(
                 $queryEmbedding,
                 $limit,
                 $minScore

@@ -62,43 +62,43 @@ final class SandboxExecutorTool
         bool $includeDatabase = false
     ): string {
         $this->statusService->addStatus('🚀 Sandbox-Ausführung gestartet');
-        
+
+        // normalize filename (prevent traversal) and validate
+        $filename = trim(basename($filename));
+        if ($filename === '' || !preg_match('/^[^\/\\\\]+\.php$/i', $filename)) {
+            $this->statusService->addStatus('❌ Ungültiger Dateiname: ' . (string) $filename);
+            throw new \InvalidArgumentException('SandboxExecutorTool: invalid filename provided.');
+        }
+
         $fullGeneratedCodePath = $this->projectDir . self::GENERATED_CODE_DIR;
-        $filePathToExecute = $fullGeneratedCodePath . basename($filename);
+        $filePathToExecute = $fullGeneratedCodePath . $filename;
 
         if (!$this->filesystem->exists($filePathToExecute)) {
-            $this->statusService->addStatus('❌ Datei nicht gefunden');
+            $this->statusService->addStatus('❌ Datei nicht gefunden: ' . $filename);
             return sprintf('ERROR: File "%s" not found in generated_code directory.', $filename);
         }
 
         try {
-            // 1. Erstelle vollständigen Projekt-Clone
             $this->statusService->addStatus('📁 Erstelle vollständige Projektkopie...');
             $projectCloneDir = $this->createProjectClone();
-            
-            // 2. Kopiere generierten Code in Clone
+
             $this->statusService->addStatus('📋 Kopiere generierten Code...');
             $this->copyGeneratedCodeToClone($projectCloneDir);
-            
-            // 3. Docker Image bauen
+
             $this->statusService->addStatus('🐳 Baue Docker-Image...');
             $this->buildDockerImage($projectCloneDir);
-            
-            // 4. Optional: Datenbank-Setup
+
             if ($includeDatabase) {
                 $this->statusService->addStatus('🗄️ Bereite Datenbank vor...');
                 $this->prepareDatabaseCopy($projectCloneDir);
             }
-            
-            // 5. Code in Sandbox ausführen
+
             $this->statusService->addStatus('⚙️ Führe Code in Sandbox aus...');
             $executionResult = $this->executeInSandbox($projectCloneDir, $filename);
-            
-            // 6. Änderungen analysieren
+
             $this->statusService->addStatus('🔍 Analysiere Änderungen...');
             $changes = $this->analyzeChanges($projectCloneDir);
-            
-            // 7. Update-Paket erstellen
+
             $this->statusService->addStatus('📦 Erstelle Update-Paket...');
             $updatePackagePath = $this->createUpdatePackage(
                 $projectCloneDir,
@@ -106,16 +106,16 @@ final class SandboxExecutorTool
                 $changes,
                 $executionResult
             );
-            
+
             $this->statusService->addStatus('✅ Sandbox-Ausführung erfolgreich abgeschlossen');
-            
+
             return $this->formatResult(
                 $executionResult,
                 $changes,
                 $filename,
                 $updatePackagePath
             );
-            
+
         } catch (\Exception $e) {
             $this->statusService->addStatus('❌ Fehler: ' . $e->getMessage());
             $this->logger->error('Sandbox execution failed', [
@@ -125,6 +125,8 @@ final class SandboxExecutorTool
             return sprintf('ERROR: Sandbox execution failed: %s', $e->getMessage());
         }
     }
+
+
 
     /**
      * Erstellt vollständige Projektkopie in generated_code/Project/

@@ -1,5 +1,5 @@
 <?php
-// src/Service/AiAgentService.php (Optimiert)
+// src/Service/AiAgentService.php (Gefixt)
 
 declare(strict_types=1);
 
@@ -28,8 +28,7 @@ final class AiAgentService
     private const MAX_BACKOFF_SECONDS = 300;
     private const MAX_TOTAL_SECONDS = 3600;
     private const CIRCUIT_BREAKER_SERVICE = 'gemini_api';
-    
-    // Kritische Fehler die NICHT retried werden sollen
+
     private const NON_RETRIABLE_ERRORS = [
         'invalid_api_key',
         'permission_denied',
@@ -54,7 +53,6 @@ final class AiAgentService
         $sessionId = $sessionId ?: Uuid::v4()->toRfc4122();
         $startTime = time();
 
-        // Initialer Status
         if ($attempt === 1) {
             $this->agentStatusService->clearStatuses($sessionId);
             $this->agentStatusService->addStatus($sessionId, '🚀 DevAgent Job gestartet');
@@ -63,14 +61,12 @@ final class AiAgentService
             $this->agentStatusService->addStatus($sessionId, sprintf('🔄 Retry-Versuch %d/%d', $attempt, self::MAX_RETRIES));
         }
 
-        // Timeout-Check
         if ((time() - $startTime) > self::MAX_TOTAL_SECONDS) {
             $this->agentStatusService->addStatus($sessionId, '⏱️ Maximale Gesamtlaufzeit überschritten');
             $this->logger->error('Max total retry time exceeded', ['session' => $sessionId]);
             return;
         }
 
-        // Circuit Breaker Check
         if ($this->circuitBreaker && !$this->circuitBreaker->isRequestAllowed(self::CIRCUIT_BREAKER_SERVICE)) {
             $status = $this->circuitBreaker->getStatus(self::CIRCUIT_BREAKER_SERVICE);
             $this->agentStatusService->addStatus(
@@ -81,8 +77,7 @@ final class AiAgentService
                 'service' => self::CIRCUIT_BREAKER_SERVICE,
                 'status' => $status
             ]);
-            
-            // Warte auf Circuit Breaker Recovery
+
             $delay = ($status['timeout'] ?? 60) + $this->computeBackoff($attempt);
             $this->requeueJob($prompt, $sessionId, $attempt, $delay);
             return;
@@ -92,40 +87,34 @@ final class AiAgentService
 
         try {
             $this->agentStatusService->addStatus($sessionId, sprintf('🤖 AI-Agent wird aufgerufen (Versuch %d)', $attempt));
-            
             $result = $this->agent->call($messages);
 
-            // Success: Circuit Breaker Update
             if ($this->circuitBreaker) {
                 $this->circuitBreaker->recordSuccess(self::CIRCUIT_BREAKER_SERVICE);
             }
 
-            // Extract Content
             $content = $this->extractContentSafely($result);
 
             if (empty($content)) {
-                throw new \RuntimeException('Response does not contain any content.');
+                throw new \RuntimeException('soft_empty_response');
             }
 
-            // Success Path
             $this->handleSuccess($sessionId, $content);
-            
+
         } catch (\Throwable $e) {
             $this->handleError($e, $prompt, $sessionId, $attempt);
         }
     }
-    
+
     private function handleSuccess(string $sessionId, string $content): void
     {
         $this->agentStatusService->addStatus($sessionId, '✅ Antwort vom AI-Agent erhalten');
         $this->agentStatusService->addStatus($sessionId, '📊 Analysiere generierte Dateien...');
-        
         $this->logger->info('Agent execution successful', [
             'session' => $sessionId,
             'preview' => $this->shortPreview($content, 200)
         ]);
 
-        // Check for generated files
         $generatedCodeDir = __DIR__ . '/../../generated_code/';
         $recentFiles = $this->getRecentFiles($generatedCodeDir);
 
@@ -134,43 +123,43 @@ final class AiAgentService
                 $sessionId,
                 sprintf('📁 %d Dateien wurden erstellt', count($recentFiles))
             );
-            
-            // Liste Dateien auf
+
             foreach (array_slice($recentFiles, 0, 5) as $file) {
                 $this->agentStatusService->addStatus($sessionId, "  • {$file}");
             }
-            
-            // Deployment-Paket erstellen
+
             $this->agentStatusService->addStatus($sessionId, '📦 Erstelle Deployment-Paket...');
             $deploymentResult = $this->createDeploymentPackage($recentFiles);
-            
             $this->agentStatusService->addStatus($sessionId, '✅ Deployment-Paket erstellt');
             $this->agentStatusService->addStatus($sessionId, 'DEPLOYMENT:' . $deploymentResult);
         }
 
         $this->agentStatusService->addStatus($sessionId, 'RESULT:' . $this->shortPreview($content, 300));
     }
-    
+
     private function handleError(\Throwable $e, string $prompt, string $sessionId, int $attempt): void
     {
         $errorMessage = $e->getMessage() ?? get_class($e);
-        
-        // Persist failure
         $rawResponse = $this->tryExtractRawFromException($e) ?? '';
         $this->persistFailedPayload($sessionId, $prompt, $rawResponse, $errorMessage, $attempt);
 
         $isRetriable = $this->isTransientError($e);
         $isNonRetriable = $this->isNonRetriableError($errorMessage);
 
-        // Circuit Breaker Update
         if ($this->circuitBreaker && $isRetriable) {
-            $this->circuitBreaker->recordFailure(self::CIRCUIT_BREAKER_SERVICE);
+            if (stripos($errorMessage, 'soft_empty_response') !== false) {
+                if (method_exists($this->circuitBreaker, 'recordSoftFailure')) {
+                    $this->circuitBreaker->recordSoftFailure(self::CIRCUIT_BREAKER_SERVICE);
+                } else {
+                    $this->logger->warning('CircuitBreaker: soft failure ignored (missing method)');
+                }
+            } else {
+                $this->circuitBreaker->recordFailure(self::CIRCUIT_BREAKER_SERVICE);
+            }
         }
 
-        // Retry-Logic
         if (!$isNonRetriable && $isRetriable && $attempt < self::MAX_RETRIES) {
             $backoff = $this->computeBackoff($attempt);
-            
             $this->agentStatusService->addStatus(
                 $sessionId,
                 sprintf('⚠️ Vorübergehender Fehler: %s', $this->shortPreview($errorMessage, 140))
@@ -191,12 +180,11 @@ final class AiAgentService
             return;
         }
 
-        // Final Failure
         $this->agentStatusService->addStatus(
             $sessionId,
             'ERROR:' . $this->shortPreview($errorMessage, 300)
         );
-        
+
         $this->logger->error('AiAgentService unrecoverable error', [
             'session' => $sessionId,
             'attempt' => $attempt,
@@ -205,65 +193,56 @@ final class AiAgentService
             'is_non_retriable' => $isNonRetriable
         ]);
     }
-    
+
     private function requeueJob(string $prompt, string $sessionId, int $nextAttempt, int $delaySeconds): void
     {
-        $newMessage = new AiAgentJob(
-            $prompt,
-            $sessionId,
-            ['attempt' => $nextAttempt]
-        );
-        
-        $this->bus->dispatch($newMessage, [
-            new DelayStamp($delaySeconds * 1000)
-        ]);
+        $newMessage = new AiAgentJob($prompt, $sessionId, ['attempt' => $nextAttempt]);
+        $this->bus->dispatch($newMessage, [new DelayStamp($delaySeconds * 1000)]);
     }
 
     private function computeBackoff(int $attempt): int
     {
-        // Progressive Backoff mit Full Jitter
         $baseDelay = match(true) {
             $attempt <= 3 => self::BASE_DELAY_SECONDS,
             $attempt <= 6 => self::BASE_DELAY_SECONDS * 4,
             default => self::BASE_DELAY_SECONDS * 8
         };
-
         $expo = min((int) ($baseDelay * (2 ** ($attempt - 1))), self::MAX_BACKOFF_SECONDS);
-        
-        // Full Jitter
         return (int) round(mt_rand(0, 1000) / 1000 * $expo);
     }
 
     private function extractContentSafely(mixed $result): string
     {
-        if (is_object($result)) {
-            if (method_exists($result, 'getContent')) {
-                try {
-                    $c = $result->getContent();
-                    return is_string($c) ? $c : (is_scalar($c) ? (string) $c : json_encode($c));
-                } catch (\Throwable) {}
-            }
-
-            if (method_exists($result, '__toString')) {
-                try {
-                    $str = (string) $result;
-                    if (!empty(trim($str))) {
-                        return $str;
-                    }
-                } catch (\Throwable) {}
-            }
-
+        if (is_object($result) && method_exists($result, 'getContent')) {
             try {
-                $json = json_encode($result);
-                if ($json !== false && $json !== '{}' && $json !== '[]') {
-                    return $json;
+                $c = $result->getContent();
+                if (!empty(trim((string)$c))) {
+                    return (string)$c;
                 }
             } catch (\Throwable) {}
         }
 
-        if (is_scalar($result)) {
-            return (string) $result;
+        try {
+            $arr = json_decode(json_encode($result), true);
+            $text = $arr['candidates'][0]['content']['parts'][0]['text']
+                ?? $arr['contents'][0]['parts'][0]['text']
+                ?? null;
+            if (!empty($text)) return $text;
+        } catch (\Throwable) {}
+
+        if (is_object($result) && method_exists($result, '__toString')) {
+            try {
+                $s = (string) $result;
+                if (!empty(trim($s))) return $s;
+            } catch (\Throwable) {}
         }
+
+        try {
+            $json = json_encode($result);
+            if (!empty($json) && $json !== '{}' && $json !== '[]') return $json;
+        } catch (\Throwable) {}
+
+        if (is_scalar($result)) return (string)$result;
 
         return '';
     }
@@ -277,40 +256,31 @@ final class AiAgentService
     private function isTransientError(\Throwable $e): bool
     {
         $msg = strtolower($e->getMessage() ?? '');
-
-        if ($e instanceof ServerExceptionInterface || $e instanceof TransportExceptionInterface) {
-            return true;
-        }
+        if ($e instanceof ServerExceptionInterface || $e instanceof TransportExceptionInterface) return true;
 
         $transientKeywords = [
-            '503', 'unavailable', 'overloaded', 'timed out', 'timeout',
-            'rate limit', 'response does not contain any content',
-            'invalid json', 'connection reset', 'temporar', 'temporarily',
-            'service unavailable', 'gateway timeout', '502', '504',
-            'too many requests', '429', 'quota exceeded',
-            'internal server error', '500',
-            'resource exhausted', 'deadline exceeded'
+            '503','unavailable','overloaded','timed out','timeout',
+            'rate limit','response does not contain any content',
+            'invalid json','connection reset','temporar','temporarily',
+            'service unavailable','gateway timeout','502','504',
+            'too many requests','429','quota exceeded',
+            'internal server error','500','resource exhausted','deadline exceeded',
+            'soft_empty_response'
         ];
 
         foreach ($transientKeywords as $k) {
-            if (strpos($msg, $k) !== false) {
-                return true;
-            }
+            if (strpos($msg, $k) !== false) return true;
         }
 
         return false;
     }
-    
+
     private function isNonRetriableError(string $errorMessage): bool
     {
         $msg = strtolower($errorMessage);
-        
         foreach (self::NON_RETRIABLE_ERRORS as $pattern) {
-            if (strpos($msg, $pattern) !== false) {
-                return true;
-            }
+            if (strpos($msg, $pattern) !== false) return true;
         }
-        
         return false;
     }
 
@@ -319,21 +289,15 @@ final class AiAgentService
         if ($e instanceof HttpExceptionInterface) {
             try {
                 $resp = $e->getResponse();
-                if (is_object($resp) && method_exists($resp, 'getContent')) {
-                    return (string) $resp->getContent(false);
-                }
+                if (is_object($resp) && method_exists($resp, 'getContent')) return (string) $resp->getContent(false);
             } catch (\Throwable) {}
         }
-
         if (method_exists($e, 'getResponse')) {
             try {
                 $resp = $e->getResponse();
-                if (is_object($resp) && method_exists($resp, 'getContent')) {
-                    return (string) $resp->getContent(false);
-                }
+                if (is_object($resp) && method_exists($resp, 'getContent')) return (string) $resp->getContent(false);
             } catch (\Throwable) {}
         }
-
         return $e->getMessage();
     }
 
@@ -349,67 +313,39 @@ final class AiAgentService
                 'created_at' => (new \DateTimeImmutable())->format('Y-m-d H:i:s'),
             ]);
         } catch (\Throwable $e) {
-            $this->logger->error('Failed to persist failed_payloads', [
-                'session' => $sessionId,
-                'err' => $e->getMessage()
-            ]);
+            $this->logger->error('Failed to persist failed_payloads', ['session' => $sessionId, 'err' => $e->getMessage()]);
         }
     }
-    
+
     private function getRecentFiles(string $dir): array
     {
-        if (!is_dir($dir)) {
-            return [];
-        }
-
+        if (!is_dir($dir)) return [];
         $recentFiles = [];
         $files = scandir($dir);
-        
         foreach ($files as $file) {
             if ($file === '.' || $file === '..') continue;
-            
             $filepath = $dir . $file;
-            if (is_file($filepath) && filemtime($filepath) > time() - 120) {
-                $recentFiles[] = $file;
-            }
+            if (is_file($filepath) && filemtime($filepath) > time() - 120) $recentFiles[] = $file;
         }
-        
         return $recentFiles;
     }
 
     private function createDeploymentPackage(array $files): string
     {
         $filesToDeploy = [];
-        
         foreach ($files as $file) {
             $targetPath = $this->determineTargetPath($file);
-            $filesToDeploy[] = [
-                'source_file' => $file,
-                'target_path' => $targetPath
-            ];
+            $filesToDeploy[] = ['source_file' => $file, 'target_path' => $targetPath];
         }
-
         return $this->deployTool->__invoke($filesToDeploy);
     }
 
     private function determineTargetPath(string $file): string
     {
-        if (str_ends_with($file, 'Test.php')) {
-            return 'tests/' . $file;
-        }
-        
-        if (str_ends_with($file, '.php')) {
-            return 'src/' . $file;
-        }
-        
-        if (str_ends_with($file, '.yaml') || str_ends_with($file, '.json')) {
-            return 'config/' . $file;
-        }
-        
-        if (preg_match('/^Version\d{14}\.php$/', $file)) {
-            return 'migrations/' . $file;
-        }
-        
+        if (str_ends_with($file, 'Test.php')) return 'tests/' . $file;
+        if (str_ends_with($file, '.php')) return 'src/' . $file;
+        if (str_ends_with($file, '.yaml') || str_ends_with($file, '.json')) return 'config/' . $file;
+        if (preg_match('/^Version\d{14}\.php$/', $file)) return 'migrations/' . $file;
         return 'generated_code/' . $file;
     }
 }

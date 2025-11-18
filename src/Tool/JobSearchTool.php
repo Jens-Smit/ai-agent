@@ -45,32 +45,32 @@ final class JobSearchTool
      * @return array Structured array containing job search results or error information.
      */
     public function __invoke(
-        #[With(description: 'Free text search for job title.')]
         ?string $what = null,
-        #[With(description: 'Free text search for employment location.')]
         ?string $where = null,
-        #[With(description: 'Free text search for job field.')]
         ?string $jobField = null,
         #[With(minimum: 1)]
-        int $page = 1,
+        ?int $page = 1,
         #[With(minimum: 1, maximum: 100)]
-        int $size = 50,
-        #[With(description: 'Employer name.')]
+        ?int $size = 50,
         ?string $employer = null,
         #[With(minimum: 0, maximum: 100)]
         ?int $publishedSince = null,
-        bool $temporaryWork = true,
-        #[With(enum: [1, 2, 4, 34])]
-        ?int $offerType = null,
-        #[With(pattern: '/^(1|2)(;(1|2))*$/', description: 'Semicolon-separated values: 1=befristet, 2=unbefristet.')]
+        #[With(enum: ['true','false'])]
+        ?string $temporaryWork = 'true',
+        #[With(enum: ['1','2','4','34'])]
+        ?string $offerType = null,
+        #[With(pattern: '/^(1|2)(;(1|2))*$/')]
         ?string $fixedTerm = null,
-        #[With(pattern: '/^(vz|tz|snw|ho|mj)(;(vz|tz|snw|ho|mj))*$/', description: 'Semicolon-separated values: vz=VOLLZEIT, tz=TEILZEIT, snw=SCHICHT_NACHTARBEIT_WOCHENENDE, ho=HEIM_TELEARBEIT, mj=MINIJOB.')]
+        #[With(pattern: '/^(vz|tz|snw|ho|mj)(;(vz|tz|snw|ho|mj))*$/')]
         ?string $workingHours = null,
-        ?bool $disability = null,
-        ?bool $corona = null,
+        #[With(enum: ['true','false'])]
+        ?string $disability = null,
+        #[With(enum: ['true','false'])]
+        ?string $corona = null,
         #[With(minimum: 1, maximum: 200)]
         ?int $radius = null,
-    ): array {
+    ): array
+    {
         $this->logger->info('JobSearchTool execution started', compact(
             'what', 'where', 'jobField', 'page', 'size', 'employer', 'publishedSince',
             'temporaryWork', 'offerType', 'fixedTerm', 'workingHours', 'disability',
