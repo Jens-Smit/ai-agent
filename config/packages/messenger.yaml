@@ -1,41 +1,71 @@
 # config/packages/messenger.yaml
-
 framework:
     messenger:
-        # Die failure_transport-Konfiguration bleibt, falls andere
-        # Nachrichten über den Messenger laufen.
         failure_transport: failed
 
         transports:
-            # https://symfony.com/doc/current/messenger.html#transport-configuration
-            # Der async-Transport kann bleiben, falls er für andere
-            # Nachrichten verwendet wird.
-            async:
+            # Separater Transport pro Agent-Typ für echte Parallelität
+            dev_agent_queue:
                 dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
                 options:
+                    queue_name: 'dev_agent'
                     use_notify: true
                     check_delayed_interval: 60000
                 retry_strategy:
                     max_retries: 3
+                    delay: 10000
                     multiplier: 2
+                    max_delay: 300000
+                    
+            personal_assistant_queue:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    queue_name: 'personal_assistant'
+                    use_notify: true
+                    check_delayed_interval: 60000
+                retry_strategy:
+                    max_retries: 5
+                    delay: 5000
+                    multiplier: 2
+                    max_delay: 60000
+                    
+            frontend_generator_queue:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    queue_name: 'frontend_generator'
+                    use_notify: true
+                    check_delayed_interval: 60000
+                retry_strategy:
+                    max_retries: 3
+                    delay: 15000
+                    multiplier: 2
+                    max_delay: 300000
+            
+            # High-Priority Queue für wichtige Tasks
+            high_priority:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    queue_name: 'high_priority'
+                    use_notify: true
+                    check_delayed_interval: 30000
+                    
             failed: 'doctrine://default?queue_name=failed'
-            # sync: 'sync://'
 
         default_bus: messenger.bus.default
 
         buses:
-            messenger.bus.default: []
+            messenger.bus.default:
+                middleware:
+                    # Custom Middleware für Agent-spezifische Logik
+                    - 'App\Messenger\Middleware\CircuitBreakerMiddleware'
+                    - 'App\Messenger\Middleware\AgentStatusMiddleware'
 
         routing:
-            # WICHTIGE ÄNDERUNG: Die Klasse Symfony\Component\Mailer\Messenger\SendEmailMessage
-            # wird NICHT mehr zum async-Transport geroutet.
-            # Symfony wird die E-Mail jetzt direkt, also synchron, versenden.
-            # Symfony\Component\Mailer\Messenger\SendEmailMessage: async
-
-            # Chat- und SMS-Nachrichten werden weiterhin asynchron behandelt,
-            # solange der Worker läuft.
-            Symfony\Component\Notifier\Message\ChatMessage: async
-            Symfony\Component\Notifier\Message\SmsMessage: async
-
-            # Route your messages to the transports
-            # 'App\Message\YourMessage': async
+            # Jeder Agent hat seine eigene Queue
+            'App\Message\AiAgentJob': dev_agent_queue
+            'App\Message\PersonalAssistantJob': personal_assistant_queue
+            'App\Message\FrontendGeneratorJob': frontend_generator_queue
+            
+            # Mailer bleibt synchron
+            Symfony\Component\Notifier\Message\ChatMessage: high_priority
+            Symfony\Component\Notifier\Message\SmsMessage: high_priority

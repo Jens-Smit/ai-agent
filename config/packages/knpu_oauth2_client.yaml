@@ -8,7 +8,4 @@ knpu_oauth2_client:
             redirect_params: {}
             # optional, um Refresh-Token zu bekommen:
             access_type: offline
-            
-            # du kannst auch `prompt: consent` setzen, damit der consent immer neu angefragt wird
-            # extra auth params:
-            #   prompt: 'consent'
+           

@@ -68,7 +68,15 @@ final class PersonalAssistantJobHandler
             return;
         }
 
-        $messages = new MessageBag(Message::ofUser($job->prompt));
+        // Erstelle enriched Message mit User-Kontext
+        $messages = new MessageBag(
+            Message::ofUser($job->prompt)
+        );
+
+        // Setze User-ID im Tool-Kontext (falls Tools den User brauchen)
+        // Dies funktioniert, weil alle Tools im selben Request-Scope laufen
+        $GLOBALS['current_user_id'] = $user->getId();
+
         $attempt = 1;
         $result = null;
 
@@ -79,14 +87,8 @@ final class PersonalAssistantJobHandler
                     sprintf('AI-Agent wird aufgerufen (Versuch %d/%d)', $attempt, self::MAX_RETRIES)
                 );
 
-                // AI-Agent-Aufruf, User und GoogleClient optional an Context übergeben
-                $result = $this->agent->call(
-                    $messages, [
-                        'user' => $user, 
-                        'google_client' => $googleClient,
-                        'google_access_token' => $user->getGoogleAccessToken(),
-                        
-                    ]);
+                // FIX: Entferne die unzulässigen Parameter
+                $result = $this->agent->call($messages);
 
                 $this->agentStatusService->addStatus($job->sessionId, 'Antwort vom AI-Agent erhalten');
                 $this->agentStatusService->addStatus(
@@ -141,5 +143,8 @@ final class PersonalAssistantJobHandler
                 sprintf('ERROR: Alle %d Versuche fehlgeschlagen', self::MAX_RETRIES)
             );
         }
+
+        // Cleanup: Entferne User-Kontext
+        unset($GLOBALS['current_user_id']);
     }
 }

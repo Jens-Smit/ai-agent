@@ -7,9 +7,9 @@ namespace App\Tool;
 use Symfony\AI\Agent\Toolbox\Attribute\AsTool;
 use Psr\Log\LoggerInterface;
 use App\Entity\User;
+use App\Repository\UserRepository;
 use Google\Service\Calendar;
 use Google\Service\Calendar\Event;
-use Symfony\Bundle\SecurityBundle\Security;
 use App\Service\GoogleClientService;
 
 #[AsTool(
@@ -20,7 +20,7 @@ final class GoogleCalendarCreateEventTool
 {
     public function __construct(
         private LoggerInterface $logger,
-        private Security $security,
+        private UserRepository $userRepository,
         private GoogleClientService $googleClientService,
     ) {}
 
@@ -46,14 +46,25 @@ final class GoogleCalendarCreateEventTool
         ]);
 
         try {
-            /** @var User|null $user */
-            $user = $this->security->getUser();
+            // Hole User aus globalem Kontext (gesetzt vom Handler)
+            $userId = $GLOBALS['current_user_id'] ?? null;
             
-            if (!$user instanceof User) {
-                $this->logger->error('No authenticated user found');
+            if (!$userId) {
+                $this->logger->error('No user context available');
                 return [
                     'status' => 'error',
-                    'message' => 'No authenticated user found. Please log in first.',
+                    'message' => 'No user context available. Internal error.',
+                ];
+            }
+
+            /** @var User|null $user */
+            $user = $this->userRepository->find($userId);
+            
+            if (!$user) {
+                $this->logger->error('User not found', ['userId' => $userId]);
+                return [
+                    'status' => 'error',
+                    'message' => 'User not found. Please log in again.',
                     'action_required' => 'login'
                 ];
             }

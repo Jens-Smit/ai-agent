@@ -1,0 +1,6 @@
+services:
+    App\\Tool\\JobSearchTool:
+        arguments:
+            $logger: '@logger'
+            $httpClient: '@http_client'
+        tags: ['ai.tool']

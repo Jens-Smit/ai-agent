@@ -34,7 +34,20 @@ services:
             $jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
             $userProvider: '@security.user.provider.concrete.app_user_provider'
     
-   
+    # Messenger Middleware
+    App\Messenger\Middleware\CircuitBreakerMiddleware:
+        arguments:
+            $circuitBreaker: '@App\Service\CircuitBreakerService'
+            $logger: '@logger'
+        tags:
+            - { name: 'monolog.logger', channel: 'messenger' }
+    
+    App\Messenger\Middleware\AgentStatusMiddleware:
+        arguments:
+            $statusService: '@App\Service\AgentStatusService'
+            $logger: '@logger'
+        tags:
+            - { name: 'monolog.logger', channel: 'messenger' }
 
         ### Services & Tools ###
         ### Services ###
@@ -53,12 +66,15 @@ services:
             $googleClientId: '%env(GOOGLE_CLIENT_ID)%'
             $googleClientSecret: '%env(GOOGLE_CLIENT_SECRET)%'
             $frontendUrl: '%env(FRONTEND_URL)%'  
+    # UserContextService
+    App\Service\UserContextService:
+        public: true
     # Circuit Breaker Service
     App\Service\CircuitBreakerService:
         arguments:
             $cache: '@cache.app'
             $logger: '@logger'
-            $failureThreshold: 5       # Anzahl Fehler bevor Circuit öffnet
+            $failureThreshold: 25       # Anzahl Fehler bevor Circuit öffnet
             $timeout: 60               # Sekunden bis Half-Open-Versuch
             $successThreshold: 2       # Erfolge zum Schließen im Half-Open
         tags:
@@ -74,6 +90,8 @@ services:
             $bus: '@messenger.default_bus'
             $conn: '@doctrine.dbal.default_connection'
             $circuitBreaker: '@App\Service\CircuitBreakerService'
+        tags:
+            - { name: 'monolog.logger', channel: 'ai_agent' }
             ### Tools ###
 
     # CodeSaverTool
@@ -159,9 +177,9 @@ services:
     App\Tool\GoogleCalendarCreateEventTool:
         arguments:
             $logger: '@logger'
-            $security: '@security.helper' # <-- Security wird über security.helper injiziert
+            $userRepository: '@App\Repository\UserRepository'
             $googleClientService: '@App\Service\GoogleClientService'
-        tags: ['ai.tool']            
+        tags: ['ai.tool']        
                      
             
         

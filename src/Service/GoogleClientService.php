@@ -22,7 +22,6 @@ class GoogleClientService
         private readonly string $googleClientSecret,
         private readonly string $frontendUrl
     ) {
-        // Temporäres Debug Logging
         $this->logger->info('GoogleClientService initialized', [
             'client_id_set' => !empty($this->googleClientId),
             'client_secret_set' => !empty($this->googleClientSecret),
@@ -37,17 +36,21 @@ class GoogleClientService
         $client->setClientId($this->googleClientId);
         $client->setClientSecret($this->googleClientSecret);
         $client->setRedirectUri($this->frontendUrl . $this->router->generate('connect_google_check'));
+     
 
+        // Fügt alle notwendigen Scopes hinzu: Gmail (Senden/Lesen/Ändern), Kalender (Vollzugriff) und Basis-Infos
         $client->addScope([
             Gmail::GMAIL_SEND,
             Gmail::GMAIL_READONLY,
             Gmail::GMAIL_MODIFY,
-            Calendar::CALENDAR,
+            Calendar::CALENDAR, // Beinhaltet den Zugriff auf Kalender-Events
             'profile',
             'email'
         ]);
 
         $client->setAccessType('offline');
+        // WICHTIG: Erlaubt Google, den Nutzer erneut um Zustimmung zu bitten, 
+        // falls neue Scopes hinzugefügt wurden.
         $client->setPrompt('consent');
 
         return $client;
@@ -124,7 +127,7 @@ class GoogleClientService
             // Merge - Google gibt refresh_token NICHT nochmal zurück
             $mergedToken = array_merge($token, $newToken);
             
-            // Refresh token explizit erhalten
+            // Refresh token explizit erhalten (falls es im Merge überschrieben wurde, was nicht passieren sollte)
             if (!isset($mergedToken['refresh_token'])) {
                 $mergedToken['refresh_token'] = $token['refresh_token'];
             }
