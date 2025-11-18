@@ -28,7 +28,7 @@ final class PersonalAssistantJobHandler
         private AgentStatusService $agentStatusService,
         private LoggerInterface $logger,
         private UserRepository $userRepository,
-        private GoogleClientService $googleClientService
+        private GoogleClientService $googleClientService,
     ) {}
 
     public function __invoke(PersonalAssistantJob $job): void
@@ -41,10 +41,12 @@ final class PersonalAssistantJobHandler
         $this->agentStatusService->clearStatuses($job->sessionId);
         $this->agentStatusService->addStatus($job->sessionId, 'Personal Assistant Job gestartet');
 
-        // User laden
+        // User aus Datenbank laden
         $user = $this->userRepository->find($job->userId);
+
         if (!$user) {
             $this->agentStatusService->addStatus($job->sessionId, 'ERROR: User nicht gefunden');
+            $this->logger->error('User nicht gefunden für Job.', ['userId' => $job->userId]);
             return;
         }
 
@@ -68,13 +70,12 @@ final class PersonalAssistantJobHandler
             return;
         }
 
-        // Erstelle enriched Message mit User-Kontext
+        // Enriched Message
         $messages = new MessageBag(
             Message::ofUser($job->prompt)
         );
 
-        // Setze User-ID im Tool-Kontext (falls Tools den User brauchen)
-        // Dies funktioniert, weil alle Tools im selben Request-Scope laufen
+        // User-ID global für Tools verfügbar machen
         $GLOBALS['current_user_id'] = $user->getId();
 
         $attempt = 1;
@@ -87,7 +88,6 @@ final class PersonalAssistantJobHandler
                     sprintf('AI-Agent wird aufgerufen (Versuch %d/%d)', $attempt, self::MAX_RETRIES)
                 );
 
-                // FIX: Entferne die unzulässigen Parameter
                 $result = $this->agent->call($messages);
 
                 $this->agentStatusService->addStatus($job->sessionId, 'Antwort vom AI-Agent erhalten');
@@ -101,6 +101,7 @@ final class PersonalAssistantJobHandler
 
             } catch (\Throwable $e) {
                 $errorMessage = $e->getMessage();
+
                 $isRetriable = $e instanceof ServerExceptionInterface ||
                                $e instanceof TransportExceptionInterface ||
                                str_contains($errorMessage, '503') ||
@@ -144,7 +145,6 @@ final class PersonalAssistantJobHandler
             );
         }
 
-        // Cleanup: Entferne User-Kontext
         unset($GLOBALS['current_user_id']);
     }
 }

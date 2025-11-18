@@ -40,11 +40,11 @@ security:
         - { path: ^/api/password/request-reset$, roles: PUBLIC_ACCESS }
         - { path: ^/api/password/reset$, roles: PUBLIC_ACCESS }
 
-        - { path: ^/api/agent, roles: PUBLIC_ACCESS }
-        - { path: ^/api/index-knowledge, roles: PUBLIC_ACCESS }
-        - { path: ^/api/devAgent, roles: PUBLIC_ACCESS }
-        - { path: ^/api/frondend_devAgent, roles: PUBLIC_ACCESS }
-        - { path: ^/api/token/refresh$, roles: PUBLIC_ACCESS }
+        - { path: ^/api/agent, roles: IS_AUTHENTICATED_FULLY }
+        - { path: ^/api/index-knowledge, roles: IS_AUTHENTICATED_FULLY }
+        - { path: ^/api/devAgent, roles: IS_AUTHENTICATED_FULLY }
+        - { path: ^/api/frondend_devAgent, roles: IS_AUTHENTICATED_FULLY }
+        - { path: ^/api/token/refresh$, roles: IS_AUTHENTICATED_FULLY }
 
         
 
