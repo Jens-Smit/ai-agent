@@ -26,7 +26,7 @@ use Symfony\Component\HttpFoundation\Cookie; // Not needed anymore, but keeping 
 class GoogleAuthenticator extends OAuth2Authenticator
 {
     // Wichtig: Dies ist die URL, zu der Ihr Frontend nach dem OAuth-Callback weiterleiten soll.
-    private const FRONTEND_REDIRECT_URL = 'https://127.0.0.1:3000/oauth-callback';
+    private const FRONTEND_REDIRECT_URL = 'https://127.0.0.1:3000/dashboard';
 
     public function __construct(
         private ClientRegistry $clientRegistry,
@@ -206,7 +206,7 @@ class GoogleAuthenticator extends OAuth2Authenticator
 
         // 2. Redirect-URL nur zur Callback-Seite (KEINE TOKENS IN DER URL!)
 
-        $redirectUri = self::FRONTEND_REDIRECT_URL; // Sollte z.B. http://127.0.0.1:3000/oauth-callback sein
+        $redirectUri = self::FRONTEND_REDIRECT_URL; // Sollte z.B. http://127.0.0.1:3000/dashboard sein
 
 
 
