@@ -13,11 +13,11 @@ gesdinet_jwt_refresh_token:
     # Token im HttpOnly Cookie speichern
     cookie:
         enabled: true
-        same_site: lax
+        same_site: none
         path: /
         domain: null
         http_only: true
-        secure: false  # true in Produktion mit HTTPS!
+        secure: true  # true in Produktion mit HTTPS!
         # ✅ Für ältere Bundle-Versionen:
         remove_token_from_body: true
         # HINWEIS: Der Cookie-Name wird über token_parameter_name gesteuert

@@ -21,6 +21,7 @@ use Symfony\Component\HttpFoundation\Cookie;
 use Gesdinet\JWTRefreshTokenBundle\Generator\RefreshTokenGeneratorInterface;
 use Gesdinet\JWTRefreshTokenBundle\Model\RefreshTokenManagerInterface;
 use Doctrine\ORM\EntityManagerInterface;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
 
 class AuthController extends AbstractController
@@ -38,7 +39,10 @@ class AuthController extends AbstractController
         private readonly RateLimiterFactory $loginLimiter,
         #[\Symfony\Component\DependencyInjection\Attribute\Autowire(service: 'limiter.password_reset_limiter')]
         private readonly RateLimiterFactory $passwordResetLimiter,
-    ) {}
+        private readonly LoggerInterface $logger
+    ) {
+        
+    }
 
     #[Route("/api/login", name: "api_login", methods: ["POST"])]
     #[OA\Post(
@@ -80,6 +84,7 @@ class AuthController extends AbstractController
         $limiter = $this->loginLimiter->create($request->getClientIp());
         if (!$limiter->consume(1)->isAccepted()) {
             // ✅ Log suspicious activity
+            $data = json_decode($request->getContent(), true); // Data muss hier dekodiert werden
             $this->logger->warning('Rate limit exceeded for IP', [
                 'ip' => $request->getClientIp(),
                 'email' => $data['email'] ?? 'unknown'
@@ -108,8 +113,22 @@ class AuthController extends AbstractController
         $refreshToken = $this->refreshTokenGenerator->createForUserWithTtl($user, 604800);
         $this->refreshTokenManager->save($refreshToken);
 
-        $accessTokenCookie = new Cookie('BEARER', $accessToken, time() + 3600, '/', null, false, true, false, 'lax');
-        $refreshTokenCookie = new Cookie('refresh_token', $refreshToken->getRefreshToken(), time() + 604800, '/', null, false, true, false, 'lax');
+        // Cookies für manuelle Anmeldung (ohne Secure, da HTTP-Frontend verwendet wird)
+        $accessTokenCookie = Cookie::create('BEARER')
+            ->withValue($accessToken)
+            ->withExpires(time() + 3600)
+            ->withPath('/')
+            ->withSecure(false) // Erlaubt die Übertragung über HTTP (für lokale Dev)
+            ->withHttpOnly(true)
+            ->withSameSite(Cookie::SAMESITE_LAX); // Lax ist sicherer für Same-Site/Standard-Login
+            
+        $refreshTokenCookie = Cookie::create('refresh_token')
+            ->withValue($refreshToken->getRefreshToken())
+            ->withExpires(time() + 604800)
+            ->withPath('/')
+            ->withSecure(false)
+            ->withHttpOnly(true)
+            ->withSameSite(Cookie::SAMESITE_LAX);
 
         $response = new JsonResponse([
             'message' => 'Login erfolgreich.',
@@ -150,8 +169,25 @@ class AuthController extends AbstractController
         }
 
         $response = new JsonResponse(['message' => 'Logout erfolgreich.']);
-        $response->headers->setCookie(new Cookie('BEARER', '', time() - 3600, '/', null, false, true, false, 'lax'));
-        $response->headers->setCookie(new Cookie('refresh_token', '', time() - 3600, '/', null, false, true, false, 'lax'));
+        // Cookies mit abgelaufenem Timestamp löschen
+        $response->headers->setCookie(
+            Cookie::create('BEARER')
+                ->withValue('')
+                ->withExpires(time() - 3600)
+                ->withPath('/')
+                ->withSecure(false) // Muss mit der set-Logik übereinstimmen
+                ->withHttpOnly(true)
+                ->withSameSite(Cookie::SAMESITE_LAX)
+        );
+        $response->headers->setCookie(
+            Cookie::create('refresh_token')
+                ->withValue('')
+                ->withExpires(time() - 3600)
+                ->withPath('/')
+                ->withSecure(false) // Muss mit der set-Logik übereinstimmen
+                ->withHttpOnly(true)
+                ->withSameSite(Cookie::SAMESITE_LAX)
+        );
 
         return $response;
     }

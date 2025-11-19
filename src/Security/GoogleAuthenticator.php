@@ -17,14 +17,17 @@ use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\Security\Core\Exception\AuthenticationException;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpFoundation\Cookie;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
 use Gesdinet\JWTRefreshTokenBundle\Generator\RefreshTokenGeneratorInterface;
 use Gesdinet\JWTRefreshTokenBundle\Model\RefreshTokenManagerInterface;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\HttpFoundation\Cookie; // Not needed anymore, but keeping the use statement for completeness
 
 class GoogleAuthenticator extends OAuth2Authenticator
 {
+    // Wichtig: Dies ist die URL, zu der Ihr Frontend nach dem OAuth-Callback weiterleiten soll.
+    private const FRONTEND_REDIRECT_URL = 'http://127.0.0.1:3000/oauth-callback';
+
     public function __construct(
         private ClientRegistry $clientRegistry,
         private UserRepository $userRepository,
@@ -184,33 +187,26 @@ class GoogleAuthenticator extends OAuth2Authenticator
     {
         $user = $token->getUser();
 
+        // 1. JWT und Refresh Token generieren
         $jwt = $this->jwtManager->create($user);
         $refreshToken = $this->refreshTokenGenerator->createForUserWithTtl($user, 604800);
         $this->refreshTokenManager->save($refreshToken);
+        
+        // 2. WICHTIG: Tokens im URL-Fragment (#) übertragen
+        // Dies funktioniert zuverlässig über HTTP, da es keine Browser-Einschränkungen wie Secure/SameSite gibt.
+        $redirectUri = self::FRONTEND_REDIRECT_URL . '#' . http_build_query([
+            'access_token' => $jwt,
+            'refresh_token' => $refreshToken->getRefreshToken(),
+            'expires_in' => 3600 // Beispiel für JWT-Gültigkeitsdauer in Sekunden
+        ]);
 
-        $response = new RedirectResponse('http://127.0.0.1:3000/dashboard');
+        $this->logger->info('Successful OAuth login, redirecting with tokens in hash', [
+            'userId' => $user->getId(),
+            'redirect' => $redirectUri
+        ]);
 
-        $response->headers->setCookie(
-            Cookie::create('BEARER')
-                ->withValue($jwt)
-                ->withExpires(time() + 3600)
-                ->withPath('/')
-                ->withSecure(true)
-                ->withHttpOnly(true)
-                ->withSameSite(Cookie::SAMESITE_NONE)
-        );
-
-        $response->headers->setCookie(
-            Cookie::create('refresh_token')
-                ->withValue($refreshToken->getRefreshToken())
-                ->withExpires(time() + 604800)
-                ->withPath('/')
-                ->withSecure(true)
-                ->withHttpOnly(true)
-                ->withSameSite(Cookie::SAMESITE_NONE)
-        );
-
-        return $response;
+        // Die RedirectResponse leitet den Browser zum Frontend um.
+        return new RedirectResponse($redirectUri);
     }
 
     public function onAuthenticationFailure(Request $request, AuthenticationException $exception): ?Response
@@ -220,7 +216,11 @@ class GoogleAuthenticator extends OAuth2Authenticator
             'query' => $request->query->all()
         ]);
 
-        // Redirect client to login with a hint to re-consent if needed
-        return new RedirectResponse('http://127.0.0.1:3000/login?error=oauth_failed&hint=reconsent');
+        // Redirect mit Fehlermeldung als Query-Parameter
+        return new RedirectResponse(
+            self::FRONTEND_REDIRECT_URL . 
+            '?error=oauth_failed&hint=reconsent&message=' . 
+            urlencode($exception->getMessage())
+        );
     }
 }
