@@ -1,13 +1,24 @@
 # Symfony / Composer / PHP
 /vendor/
 /var/
+/bin/
+/frontend/
+/generated_code/
+/generated_data/
+knowledge_base/*
+!knowledge_base/
+migrations/*
+!migrations/
 /.env.local
 .env.dev
 .env.test.local
+.env.test
 .env
 .phpunit.result.cache
 /public/bundles/
-/public/uploads/
+/public/uploads/*
+!public/uploads/
+/public/swagger-ui/
 /config/jwt/private.pem
 /config/jwt/public.pem
 
@@ -40,7 +51,4 @@ docker-compose.override.yaml
 # MacOS / Windows
 .DS_Store
 Thumbs.db
-public/uploads/*
-
-public/uploads/
 

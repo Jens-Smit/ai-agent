@@ -45,6 +45,7 @@ security:
         - { path: ^/api/devAgent, roles: IS_AUTHENTICATED_FULLY }
         - { path: ^/api/frondend_devAgent, roles: IS_AUTHENTICATED_FULLY }
         - { path: ^/api/token/refresh$, roles: IS_AUTHENTICATED_FULLY }
+        - { path: ^/api/user, roles: IS_AUTHENTICATED_FULLY }
         - { path: ^/api/user/settings, roles: IS_AUTHENTICATED_FULLY }
         
 
