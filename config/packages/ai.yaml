@@ -109,7 +109,7 @@ ai:
         - 'App\Tool\PdfGenerator'
         - 'App\Tool\MySQLKnowledgeSearchTool'
         - 'App\Tool\GoogleCalendarCreateEventTool'
-        - 'App\Tool\JobSearchTool'
+        #- 'App\Tool\JobSearchTool'
         
         
         
