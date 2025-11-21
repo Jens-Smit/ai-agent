@@ -48,7 +48,7 @@ services:
             $logger: '@logger'
         tags:
             - { name: 'monolog.logger', channel: 'messenger' }
-
+   
         ### Services & Tools ###
         ### Services ###
 
@@ -92,6 +92,24 @@ services:
             $circuitBreaker: '@App\Service\CircuitBreakerService'
         tags:
             - { name: 'monolog.logger', channel: 'ai_agent' }
+ # UserKnowledgeService
+    App\Service\UserKnowledgeService:
+        arguments:
+            $em: '@doctrine.orm.entity_manager'
+            $knowledgeRepo: '@App\Repository\UserKnowledgeDocumentRepository'
+            $platform: '@ai.platform.gemini'
+            $logger: '@logger'
+
+    # UserDocumentService
+    App\Service\UserDocumentService:
+        arguments:
+            $em: '@doctrine.orm.entity_manager'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $logger: '@logger'
+            $uploadDirectory: '%kernel.project_dir%/var/user_uploads'
+
+
+     
             ### Tools ###
 
     # CodeSaverTool
@@ -144,10 +162,11 @@ services:
     # ToolRequestor
     App\Tool\ToolRequestor:
         arguments:
-            $httpClient: '@http_client'
-            $logger: '@logger'
-        tags: 
-            - { name: 'ai.tool' }
+            $logger: '@Psr\Log\LoggerInterface'
+            $githubToken: '%env(GITHUB_ACCESS_TOKEN)%'
+            # PASSEN SIE DIESE ZEILE AN: Ersetzen Sie den Wert durch Ihr tatsächliches GitHub-Repository (z.B. 'Krostar/AI-Agent-Tools')
+            $githubRepo: '%env(DEV_AGENT_GITHUB_REPO)%'
+            $httpClient: '@Symfony\Contracts\HttpClient\HttpClientInterface'
    
     App\Tool\PdfGenerator:
         arguments:
@@ -162,8 +181,7 @@ services:
             $em: '@doctrine.orm.entity_manager'
             $knowledgeRepo: '@App\Repository\KnowledgeDocumentRepository'
             $logger: '@logger'
-        tags:
-            - { name: 'ai.tool' }
+        tags: ['ai.tool']
 
     # NEW: MySQL Knowledge Search Tool
     App\Tool\MySQLKnowledgeSearchTool:
@@ -184,6 +202,31 @@ services:
     App\Tool\JobSearchTool:
         arguments:
             $httpClient: '@http_client'
+            $logger: '@logger'
+        tags: ['ai.tool']
+    # UserKnowledgeSearchTool
+    App\Tool\UserKnowledgeSearchTool:
+        arguments:
+            $platform: '@ai.platform.gemini'
+            $knowledgeRepo: '@App\Repository\UserKnowledgeDocumentRepository'
+            $userRepository: '@App\Repository\UserRepository'
+            $logger: '@logger'
+        tags: ['ai.tool']
+
+    # AddUserKnowledgeTool
+    App\Tool\AddUserKnowledgeTool:
+        arguments:
+            $knowledgeService: '@App\Service\UserKnowledgeService'
+            $userRepository: '@App\Repository\UserRepository'
+            $logger: '@logger'
+        tags: ['ai.tool']
+
+    # UserDocumentTool
+    App\Tool\UserDocumentTool:
+        arguments:
+            $documentService: '@App\Service\UserDocumentService'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $userRepository: '@App\Repository\UserRepository'
             $logger: '@logger'
         tags: ['ai.tool']
             

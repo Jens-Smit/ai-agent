@@ -7,337 +7,154 @@ namespace App\Service;
 
 use App\Tool\ToolRequestor;
 use Psr\Log\LoggerInterface;
+use Symfony\AI\Agent\Agent;
 use Symfony\AI\Agent\Toolbox\Toolbox;
+use Symfony\AI\Agent\Toolbox\FaultTolerantToolbox;
+use Symfony\AI\Platform\Message\Message;
+use Symfony\AI\Platform\Message\MessageBag;
+use Symfony\AI\Platform\PlatformInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
- * Tool Capability Checker
- * 
- * Prüft ob erforderliche Tools verfügbar sind und fordert
- * automatisch neue Tools beim DevAgent an, falls nötig.
+ * Dynamic Tool Capability Checker
+ * * Nutzt einen internen Agenten, um User-Intent gegen verfügbare Tools zu matchen
+ * und bei Bedarf dynamisch neue Tools zu spezifizieren.
  */
 final class ToolCapabilityChecker
 {
-    // Mapping von Capabilities zu Tool-Namen
-    private const CAPABILITY_TOOL_MAP = [
-        'apartment_search' => 'immobilien_search_tool',
-        'real_estate_search' => 'immobilien_search_tool',
-        'property_search' => 'immobilien_search_tool',
-        'calendar_management' => 'google_calendar_create_event',
-        'appointment_scheduling' => 'google_calendar_create_event',
-        'email_sending' => 'gmail_send_tool',
-        'slack_messaging' => 'slack_integration_tool',
-        'database_query' => 'database_query_tool',
-        'file_upload' => 'file_upload_tool',
-        'image_processing' => 'image_processor_tool',
-        'pdf_generation' => 'PdfGenerator',
-        'web_scraping' => 'web_scraper',
-        'api_calling' => 'api_client',
-    ];
-
-    // Template-Prompts für Tool-Entwicklung
-    private const TOOL_TEMPLATES = [
-        'immobilien_search_tool' => <<<PROMPT
-Entwickle ein Tool für Immobiliensuche mit folgenden Anforderungen:
-
-NAME: ImmobilienSearchTool
-BESCHREIBUNG: Durchsucht Immobilienportale (ImmobilienScout24, Immowelt) nach Wohnungen/Häusern
-
-PARAMETER:
-- city (string, required): Stadt (z.B. "Berlin")
-- district (string, optional): Stadtteil (z.B. "Mitte")
-- property_type (enum: apartment|house, default: apartment)
-- min_price (int, optional): Minimaler Preis in EUR
-- max_price (int, required): Maximaler Preis in EUR
-- min_rooms (float, optional): Minimale Anzahl Zimmer
-- max_rooms (float, optional): Maximale Anzahl Zimmer
-- min_size (int, optional): Minimale Größe in m²
-- radius_km (int, optional): Suchradius in km (für Umkreissuche)
-
-RÜCKGABE:
-Array mit Immobilien-Objekten:
-[
-  {
-    "title": "Schöne 3-Zimmer-Wohnung",
-    "price": 1500,
-    "size": 80,
-    "rooms": 3,
-    "address": "Invalidenstr. 42, 10115 Berlin",
-    "url": "https://...",
-    "images": ["url1", "url2"],
-    "contact": {"phone": "...", "email": "..."}
-  }
-]
-
-IMPLEMENTIERUNG:
-1. Nutze WebScraperTool für ImmobilienScout24
-2. Nutze ApiClientTool falls API verfügbar
-3. Implementiere Caching (15 Minuten)
-4. Fehlerbehandlung für Rate-Limits
-5. Validierung aller Parameter
-
-TESTS:
-- Erfolgreiche Suche
-- Keine Ergebnisse
-- Ungültige Parameter
-- API-Fehler
-
-WICHTIG: 
-- Respektiere robots.txt
-- Rate-Limiting beachten
-- User-Agent setzen
-PROMPT,
-
-        'gmail_send_tool' => <<<PROMPT
-Entwickle ein Tool zum Versenden von E-Mails über Gmail API:
-
-NAME: GmailSendTool
-BESCHREIBUNG: Sendet E-Mails über Gmail API im Namen des authentifizierten Users
-
-PARAMETER:
-- to (string, required): Empfänger-E-Mail
-- subject (string, required): Betreff
-- body (string, required): E-Mail-Body (Text oder HTML)
-- cc (array, optional): CC-Empfänger
-- bcc (array, optional): BCC-Empfänger
-- attachments (array, optional): Dateianhänge
-
-VORAUSSETZUNGEN:
-- Google OAuth Integration muss vorhanden sein
-- Gmail API Scope erforderlich: https://www.googleapis.com/auth/gmail.send
-- GoogleClientService nutzen für Authentication
-
-RÜCKGABE:
-{
-  "status": "success",
-  "message_id": "...",
-  "thread_id": "..."
-}
-
-IMPLEMENTIERUNG:
-1. Hole Gmail Service via GoogleClientService
-2. Erstelle MIME-Message
-3. Base64-encode Message
-4. Sende via Gmail API
-5. Error-Handling für Auth-Fehler
-
-TESTS:
-- Erfolgreicher Versand
-- Auth-Fehler
-- Ungültige E-Mail-Adresse
-- Mit/Ohne Attachments
-PROMPT,
-
-        'slack_integration_tool' => <<<PROMPT
-Entwickle ein Tool für Slack-Integration:
-
-NAME: SlackIntegrationTool
-BESCHREIBUNG: Sendet Nachrichten an Slack-Channels/Users
-
-PARAMETER:
-- channel (string, required): Channel-Name oder User-ID
-- message (string, required): Nachricht
-- thread_ts (string, optional): Thread-Timestamp für Antworten
-- blocks (array, optional): Slack Block Kit Blocks
-- attachments (array, optional): Message Attachments
-
-KONFIGURATION:
-- Benötigt SLACK_BOT_TOKEN in .env
-- Scopes: chat:write, channels:read, users:read
-
-RÜCKGABE:
-{
-  "status": "success",
-  "ts": "1234567890.123456",
-  "channel": "C1234567890"
-}
-
-IMPLEMENTIERUNG:
-1. Nutze ApiClientTool mit Slack API
-2. Token aus Environment
-3. Validiere Channel existiert
-4. Formatiere Message (Markdown → Slack Markup)
-
-TESTS:
-- Nachricht an Channel
-- Nachricht an User (DM)
-- Thread-Reply
-- Mit Blocks
-- Fehlerbehandlung
-PROMPT
-    ];
-
-    private array $availableTools = [];
+    private array $availableToolDefinitions = [];
 
     public function __construct(
-        #[Autowire(service: 'ai.toolbox.personal_assistent')]
+        #[Autowire(service: 'ai.fault_tolerant_toolbox.personal_assistent.inner')]
         private Toolbox $toolbox,
+        
+        // KORREKTUR: Wir injizieren die Platform statt eines nicht existierenden ChatModels
+        #[Autowire(service: 'ai.traceable_platform.gemini')]
+        private PlatformInterface $platform,
+        
         private ToolRequestor $toolRequestor,
         private LoggerInterface $logger
     ) {
-        $this->loadAvailableTools();
+        $this->loadAvailableToolDefinitions();
     }
 
     /**
-     * Prüft ob alle erforderlichen Capabilities verfügbar sind
-     * 
-     * @param array $requiredCapabilities z.B. ['apartment_search', 'calendar_management']
-     * @return array ['missing' => [...], 'available' => [...]]
+     * Analysiert den Intent und prüft dynamisch auf Tools
      */
-    public function checkCapabilities(array $requiredCapabilities): array
+    public function ensureCapabilitiesFor(string $userIntent): array
     {
-        $available = [];
-        $missing = [];
+        // 1. LLM fragen: Haben wir das Tool schon?
+        $analysis = $this->analyzeToolAvailability($userIntent);
 
-        foreach ($requiredCapabilities as $capability) {
-            $toolName = self::CAPABILITY_TOOL_MAP[$capability] ?? null;
-
-            if (!$toolName) {
-                $this->logger->warning('Unknown capability requested', ['capability' => $capability]);
-                $missing[] = $capability;
-                continue;
-            }
-
-            if ($this->isToolAvailable($toolName)) {
-                $available[] = $capability;
-            } else {
-                $missing[] = $capability;
-            }
+        if ($analysis['has_tool'] ?? false) {
+            $this->logger->info('Matching tool found', ['tool' => $analysis['tool_name']]);
+            return ['status' => 'available', 'tool' => $analysis['tool_name']];
         }
 
-        return [
-            'available' => $available,
-            'missing' => $missing
-        ];
+        // 2. Wenn nicht: Tool dynamisch anfordern
+        $this->logger->info('No matching tool found. Requesting creation.', ['intent' => $userIntent]);
+        $techDescription = $analysis['missing_logic_description'] ?? "Tool logic for: $userIntent";
+        
+        return $this->requestDynamicToolCreation($userIntent, $techDescription);
     }
 
     /**
-     * Fordert fehlende Tools beim DevAgent an
+     * Erstellt einen Ad-Hoc Agenten, um zu prüfen, ob der Intent lösbar ist.
      */
-    public function requestMissingTools(array $missingCapabilities): array
+    private function analyzeToolAvailability(string $userIntent): array
     {
-        $results = [];
+        // Liste der Tools für den Prompt vorbereiten
+        $toolDescriptions = json_encode($this->availableToolDefinitions, JSON_PRETTY_PRINT);
 
-        foreach ($missingCapabilities as $capability) {
-            $toolName = self::CAPABILITY_TOOL_MAP[$capability] ?? null;
-
-            if (!$toolName) {
-                $this->logger->warning('Cannot request tool for unknown capability', ['capability' => $capability]);
-                continue;
-            }
-
-            $prompt = $this->getToolDevelopmentPrompt($toolName);
-
-            if (!$prompt) {
-                $this->logger->error('No development prompt available for tool', ['tool' => $toolName]);
-                continue;
-            }
-
-            $this->logger->info('Requesting tool development from DevAgent', [
-                'tool' => $toolName,
-                'capability' => $capability
-            ]);
-
-            try {
-                $result = ($this->toolRequestor)($prompt);
-                $results[$toolName] = $result;
-                
-                if ($result['status'] === 'success') {
-                    $this->logger->info('Tool development requested successfully', ['tool' => $toolName]);
-                } else {
-                    $this->logger->error('Tool development request failed', [
-                        'tool' => $toolName,
-                        'result' => $result
-                    ]);
-                }
-            } catch (\Exception $e) {
-                $this->logger->error('Failed to request tool development', [
-                    'tool' => $toolName,
-                    'error' => $e->getMessage()
-                ]);
-                
-                $results[$toolName] = [
-                    'status' => 'error',
-                    'message' => $e->getMessage()
-                ];
-            }
+        // System Prompt definieren
+        $systemPrompt = <<<PROMPT
+        Du bist ein intelligenter System-Architekt für eine Symfony AI Anwendung.
+        
+        VERFÜGBARE TOOLS:
+        $toolDescriptions
+        
+        AUFGABE:
+        Prüfe, ob eines der verfügbaren Tools den untenstehenden User Intent funktional erfüllen kann.
+        Achte auf die BESCHREIBUNG, nicht nur auf den Namen.
+        
+        ANTWORTE NUR IM JSON-FORMAT (ohne Markdown ```json ... ```):
+        {
+            "has_tool": boolean,
+            "tool_name": "Name des Tools oder null",
+            "reasoning": "Kurze Begründung",
+            "missing_logic_description": "Falls has_tool false ist: Eine präzise technische Beschreibung für einen Entwickler, was das neue Tool tun muss."
         }
+        PROMPT;
 
-        return $results;
+        // KORREKTUR: Wir nutzen die Agent Klasse direkt wie in der Doku "Basic Usage"
+        // Wir nutzen hier ein schnelles Modell (Flash) für diese interne Logik-Prüfung
+        $checkerAgent = new Agent($this->platform, 'gemini-2.5-flash');
+
+        $messages = new MessageBag(
+            Message::forSystem($systemPrompt),
+            Message::ofUser("USER INTENT: $userIntent")
+        );
+
+        try {
+            $result = $checkerAgent->call($messages);
+            $content = $result->getContent();
+            
+            // Markdown-Code-Blöcke entfernen, falls das LLM welche sendet
+            $content = str_replace(['```json', '```'], '', $content);
+            
+            return json_decode($content, true) ?? [];
+        } catch (\Exception $e) {
+            $this->logger->error('LLM Analysis failed', ['error' => $e->getMessage()]);
+            // Fallback: Wir nehmen an, wir haben das Tool nicht
+            return [
+                'has_tool' => false, 
+                'missing_logic_description' => "Create a tool capable of handling: $userIntent"
+            ];
+        }
     }
 
     /**
-     * Automatische Capability-Erkennung aus User-Intent
+     * Fordert den DevAgent an (via ToolRequestor)
      */
-    public function detectRequiredCapabilities(string $userIntent): array
+    private function requestDynamicToolCreation(string $userIntent, string $techDescription): array
     {
-        $intent = strtolower($userIntent);
-        $required = [];
+        $devPrompt = <<<PROMPT
+        Entwickle ein neues Symfony AI Tool (PHP Klasse).
+        
+        ANFORDERUNG (User Intent): $userIntent
+        TECHNISCHE SPEZIFIKATION: $techDescription
+        
+        RICHTLINIEN:
+        - Namespace: App\Tool
+        - Nutze #[AsTool] Attribute
+        - Implementiere __invoke
+        - Beachte Strict Types und Error Handling
+        PROMPT;
 
-        // Keywords für verschiedene Capabilities
-        $patterns = [
-            'apartment_search' => ['wohnung', 'apartment', 'immobilie', 'mieten', 'zimmer'],
-            'calendar_management' => ['termin', 'kalendar', 'meeting', 'appointment', 'besichtigung'],
-            'email_sending' => ['email', 'mail', 'nachricht senden', 'schreib eine mail'],
-            'slack_messaging' => ['slack', 'slack nachricht', 'team benachrichtigen'],
-            'web_scraping' => ['webseite', 'scrape', 'extrahiere von', 'daten von webseite'],
-            'pdf_generation' => ['pdf', 'dokument erstellen', 'report generieren'],
-        ];
-
-        foreach ($patterns as $capability => $keywords) {
-            foreach ($keywords as $keyword) {
-                if (str_contains($intent, $keyword)) {
-                    $required[] = $capability;
-                    break; // Nur einmal pro Capability
-                }
-            }
-        }
-
-        return array_unique($required);
+        return ($this->toolRequestor)($devPrompt);
     }
 
-    /**
-     * Lädt verfügbare Tools aus Toolbox
-     */
-    private function loadAvailableTools(): void
+    private function loadAvailableToolDefinitions(): void
     {
         try {
             $tools = $this->toolbox->getTools();
-            
             foreach ($tools as $tool) {
-                $this->availableTools[] = $tool->getName();
+                $this->availableToolDefinitions[] = [
+                    'name' => $tool->getName(),
+                    'description' => $tool->getDescription(),
+                ];
             }
-            
-            $this->logger->info('Loaded available tools', [
-                'count' => count($this->availableTools),
-                'tools' => $this->availableTools
-            ]);
         } catch (\Exception $e) {
-            $this->logger->error('Failed to load available tools', ['error' => $e->getMessage()]);
+            $this->logger->error('Failed to load tools', ['error' => $e->getMessage()]);
         }
     }
-
-    /**
-     * Prüft ob Tool verfügbar ist
-     */
-    private function isToolAvailable(string $toolName): bool
+    public function getAvailableToolDefinitions(): array
     {
-        return in_array($toolName, $this->availableTools, true);
+        return $this->availableToolDefinitions;
     }
 
-    /**
-     * Holt Development-Prompt für Tool
-     */
-    private function getToolDevelopmentPrompt(string $toolName): ?string
-    {
-        return self::TOOL_TEMPLATES[$toolName] ?? null;
-    }
-
-    /**
-     * Gibt Liste aller verfügbaren Tools zurück
-     */
     public function getAvailableTools(): array
     {
-        return $this->availableTools;
+        return array_column($this->availableToolDefinitions, 'name');
     }
 }

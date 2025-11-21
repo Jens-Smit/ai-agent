@@ -11,6 +11,7 @@ use Google\Service\Gmail;
 use Google\Service\Calendar;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 class GoogleClientService
 {
@@ -18,6 +19,7 @@ class GoogleClientService
         private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
         private readonly UrlGeneratorInterface $router,
+        private readonly HttpClientInterface $httpClient,   // <-- injizierter HttpClient
         private readonly string $googleClientId,
         private readonly string $googleClientSecret,
         private readonly string $frontendUrl
@@ -36,21 +38,17 @@ class GoogleClientService
         $client->setClientId($this->googleClientId);
         $client->setClientSecret($this->googleClientSecret);
         $client->setRedirectUri($this->frontendUrl . $this->router->generate('connect_google_check'));
-     
 
-        // Fügt alle notwendigen Scopes hinzu: Gmail (Senden/Lesen/Ändern), Kalender (Vollzugriff) und Basis-Infos
         $client->addScope([
             Gmail::GMAIL_SEND,
             Gmail::GMAIL_READONLY,
             Gmail::GMAIL_MODIFY,
-            Calendar::CALENDAR, // Beinhaltet den Zugriff auf Kalender-Events
+            Calendar::CALENDAR,
             'profile',
             'email'
         ]);
 
         $client->setAccessType('offline');
-        // WICHTIG: Erlaubt Google, den Nutzer erneut um Zustimmung zu bitten, 
-        // falls neue Scopes hinzugefügt wurden.
         $client->setPrompt('consent');
 
         return $client;
@@ -63,16 +61,13 @@ class GoogleClientService
             'email' => $user->getEmail()
         ]);
 
-        // Load token
         $rawToken = $user->getGoogleAccessToken();
-
         if (!$rawToken) {
             $this->logger->error('No Google OAuth token stored');
             throw new \RuntimeException('Google OAuth token missing. Please log in again.');
         }
 
         $token = json_decode($rawToken, true);
-
         if (!is_array($token)) {
             $this->logger->error('Invalid token JSON');
             throw new \RuntimeException('Invalid Google token format.');
@@ -89,13 +84,9 @@ class GoogleClientService
             throw new \RuntimeException('Refresh token missing. Please log in again to reconnect Google.');
         }
 
-        // WICHTIG: Client MUSS VOR setAccessToken initialisiert werden
         $client = $this->buildBaseClient();
-        
-        // Token setzen
         $client->setAccessToken($token);
 
-        // Still valid?
         if (!$client->isAccessTokenExpired()) {
             $this->logger->info('Access token still valid');
             return $client;
@@ -107,7 +98,6 @@ class GoogleClientService
         ]);
 
         try {
-            // Der Client ist bereits konfiguriert mit client_id und client_secret
             $newToken = $client->fetchAccessTokenWithRefreshToken($token['refresh_token']);
 
             $this->logger->info('Refresh response', [
@@ -124,38 +114,28 @@ class GoogleClientService
                 throw new \RuntimeException($msg);
             }
 
-            // Merge - Google gibt refresh_token NICHT nochmal zurück
             $mergedToken = array_merge($token, $newToken);
-            
-            // Refresh token explizit erhalten (falls es im Merge überschrieben wurde, was nicht passieren sollte)
             if (!isset($mergedToken['refresh_token'])) {
                 $mergedToken['refresh_token'] = $token['refresh_token'];
             }
 
-            // Expires timestamp aktualisieren
             if (isset($mergedToken['expires_in'])) {
                 $mergedToken['expires'] = time() + (int)$mergedToken['expires_in'];
             }
 
-            // In DB speichern
             $user->setGoogleAccessToken(json_encode($mergedToken));
-            
-            // Expires timestamp auch in User entity
             if (isset($mergedToken['expires'])) {
                 $user->setGoogleTokenExpiresAt(
                     (new \DateTimeImmutable())->setTimestamp((int)$mergedToken['expires'])
                 );
             }
-            
             $this->entityManager->flush();
 
             $this->logger->info('Token updated in DB', [
                 'new_expires' => $mergedToken['expires'] ?? 'unknown'
             ]);
 
-            // Aktualisierten Token im Client setzen
             $client->setAccessToken($mergedToken);
-
             return $client;
 
         } catch (\Throwable $e) {
@@ -172,5 +152,32 @@ class GoogleClientService
     public function getAuthUrl(): string
     {
         return $this->buildBaseClient()->createAuthUrl();
+    }
+
+    /**
+     * Beispiel-Methode: Gemini API Call über den dekorierten HttpClient
+     */
+    public function callGeminiApi(User $user, array $payload): array
+    {
+        $client = $this->getClientForUser($user);
+        $accessToken = $client->getAccessToken()['access_token'] ?? null;
+
+        if (!$accessToken) {
+            throw new \RuntimeException('No valid access token for Gemini API');
+        }
+
+        $response = $this->httpClient->request(
+            'POST',
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+            [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $accessToken,
+                    'Content-Type' => 'application/json',
+                ],
+                'json' => $payload,
+            ]
+        );
+
+        return $response->toArray(false);
     }
 }

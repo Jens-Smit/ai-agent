@@ -25,34 +25,35 @@ final class JobSearchTool
     ) {}
 
     public function __invoke(
-        ?string $what = null,
-        ?string $where = null,
+        string $what = '',
+        string $where = '',
 
         // Nur die nötigsten aktiven Parameter lassen wir drin
-        ?int $page = 1,
-        ?int $size = 50,
+        int $page = 1,
+        int $size = 50,
 
         // --- Der Rest komplett auskommentiert zum Debuggen ---
         /*
-        ?string $jobField = null,
+        string $jobField = '',
         #[With(minimum: 1, maximum: 100)]
-        ?int $publishedSince = null,
+        int $publishedSince = '',
         #[With(enum: ['true','false'])]
-        ?string $temporaryWork = 'true',
+        string $temporaryWork = 'true',
         #[With(enum: ['1','2','4','34'])]
-        ?string $offerType = null,
+        string $offerType = '',
         #[With(pattern: '/^(1|2)(;(1|2))*$/')]
-        ?string $fixedTerm = null,
+        string $fixedTerm = '',
         #[With(pattern: '/^(vz|tz|snw|ho|mj)(;(vz|tz|snw|ho|mj))*$/')]
-        ?string $workingHours = null,
+        string $workingHours = '',
         #[With(enum: ['true','false'])]
-        ?string $disability = null,
+        string $disability = '',
         #[With(enum: ['true','false'])]
-        ?string $corona = null,
+        string $corona = '',
         #[With(minimum: 1, maximum: 200)]
-        ?int $radius = null,
-        ?string $employer = null,
+        
+        string $employer = '',
         */
+        int $radius = 1,
     ): array
     {
         $this->logger->info('JobSearchTool execution started', compact(
@@ -100,11 +101,11 @@ final class JobSearchTool
             if ($corona !== null) {
                 $queryParams['corona'] = $corona ? 'true' : 'false';
             }
+            
+            */
             if ($radius !== null) {
                 $queryParams['umkreis'] = $radius;
             }
-            */
-
             $response = $this->httpClient->request('GET', self::API_BASE_URL . '/pc/v4/jobs', [
                 'headers' => [
                     'X-API-Key' => self::API_KEY,

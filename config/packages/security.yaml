@@ -47,6 +47,8 @@ security:
         - { path: ^/api/token/refresh$, roles: IS_AUTHENTICATED_FULLY }
         - { path: ^/api/user, roles: IS_AUTHENTICATED_FULLY }
         - { path: ^/api/user/settings, roles: IS_AUTHENTICATED_FULLY }
+        - { path: ^/api/knowledge, roles: IS_AUTHENTICATED_FULLY }
+        - { path: ^/api/documents, roles: IS_AUTHENTICATED_FULLY }
         
 
         

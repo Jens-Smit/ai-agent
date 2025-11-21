@@ -97,7 +97,7 @@ ai:
       prompt:
         file: '%kernel.project_dir%/config/prompts/file_personal_assistent_prompt.txt'
         include_tools: true
-      tools:
+      tools: 
         #- 'App\Tool\CodeSaverTool'
         #- 'App\Tool\KnowledgeIndexerTool'
         #- 'App\Tool\AnalyzeCodeTool'
@@ -109,12 +109,14 @@ ai:
         - 'App\Tool\PdfGenerator'
         - 'App\Tool\MySQLKnowledgeSearchTool'
         - 'App\Tool\GoogleCalendarCreateEventTool'
-        #- 'App\Tool\JobSearchTool'
-        
-        
-        
-                
-        
+        - 'App\Tool\JobSearchTool'
+        - 'App\Tool\SendMailTool'
+        #- 'App\Tool\ReceiveMailTool'
+        #- 'App\Tool\UserKnowledgeSearchTool'
+        #- 'App\Tool\AddUserKnowledgeTool'
+        #- 'App\Tool\UserDocumentTool'
+
+       
       fault_tolerant_toolbox: true
       ### Alternative LLM Configurations for the File Generator Agent openAi ###
     

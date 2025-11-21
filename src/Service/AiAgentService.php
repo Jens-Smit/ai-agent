@@ -1,5 +1,5 @@
 <?php
-// src/Service/AiAgentService.php (Gefixt)
+// src/Service/AiAgentService.php 
 
 declare(strict_types=1);
 
@@ -58,7 +58,7 @@ final class AiAgentService
             $this->agentStatusService->addStatus($sessionId, '🚀 DevAgent Job gestartet');
             $this->agentStatusService->addStatus($sessionId, '📝 Prompt wird analysiert...');
         } else {
-            $this->agentStatusService->addStatus($sessionId, sprintf('🔄 Retry-Versuch %d/%d', $attempt, self::MAX_RETRIES));
+            $this->agentStatusService->addStatus($sessionId, sprintf('🔄 Retry-Versuch %d/%d (Debugging-Schleife)', $attempt, self::MAX_RETRIES)); // ÄNDERUNG 1: Status für Debugging-Versuch präzisiert
         }
 
         if ((time() - $startTime) > self::MAX_TOTAL_SECONDS) {
@@ -99,14 +99,16 @@ final class AiAgentService
                 throw new \RuntimeException('soft_empty_response');
             }
 
-            $this->handleSuccess($sessionId, $content);
+            // ÄNDERUNG 2: Aufruf der überarbeiteten handleSuccess mit $prompt und $attempt
+            $this->handleSuccess($sessionId, $content, $prompt, $attempt);
 
         } catch (\Throwable $e) {
             $this->handleError($e, $prompt, $sessionId, $attempt);
         }
     }
 
-    private function handleSuccess(string $sessionId, string $content): void
+    // ÄNDERUNG 3: handleSuccess Signatur erweitert, um $prompt und $attempt für das Debugging zu erhalten
+    private function handleSuccess(string $sessionId, string $content, string $originalPrompt, int $attempt): void
     {
         $this->agentStatusService->addStatus($sessionId, '✅ Antwort vom AI-Agent erhalten');
         $this->agentStatusService->addStatus($sessionId, '📊 Analysiere generierte Dateien...');
@@ -117,7 +119,32 @@ final class AiAgentService
 
         $generatedCodeDir = __DIR__ . '/../../generated_code/';
         $recentFiles = $this->getRecentFiles($generatedCodeDir);
+        
+        // ÄNDERUNG 4: Überprüfung auf Sandbox-Fehler im Content der AI-Antwort
+        if (str_contains($content, 'Failed to execute tool "run_code_in_sandbox"') || str_contains($content, 'ArgumentCountError')) {
+            $this->agentStatusService->addStatus($sessionId, '❌ Sandbox-Test fehlgeschlagen! Deployment wird übersprungen.');
+            $this->agentStatusService->addStatus($sessionId, '🐛 Starte Debugging-Schleife...');
+            $this->logger->warning('Sandbox test failed, initiating debug loop.', ['session' => $sessionId, 'attempt' => $attempt]);
 
+            // ÄNDERUNG 5: Wenn der Sandbox-Test fehlschlägt, wird eine neue Aufgabe mit einem angepassten Prompt zum Debugging ausgelöst
+            if ($attempt < self::MAX_RETRIES) {
+                // Generiere einen Debugging-Prompt
+                $debugPrompt = sprintf(
+                    "Der Code-Generierungsversuch %d für den Auftrag '%s' ist fehlgeschlagen, da der 'run_code_in_sandbox'-Tool die folgenden Fehler meldete: %s. Bitte analysiere den generierten Code, nutze deine Tools (wie z.B. einen Code-Reader), um andere funktionierende Tools zu prüfen, korrigiere den Code und liefere die korrigierten Dateien erneut aus. KEIN DEPLOYMENT DURCHFÜHREN, solange der Sandbox-Test fehlschlägt.",
+                    $attempt,
+                    $this->shortPreview($originalPrompt, 100),
+                    $this->shortPreview($content, 200) // Fügt den Fehlerkontext ein
+                );
+                
+                $backoff = $this->computeBackoff($attempt);
+                $this->requeueJob($debugPrompt, $sessionId, $attempt + 1, $backoff);
+                return; // Beende die Funktion, Deployment wird nicht erreicht
+            } else {
+                $this->agentStatusService->addStatus($sessionId, '❌ Maximale Debug-Versuche erreicht. Job beendet.');
+            }
+        }
+
+        // --- Deployment-Logik (Nur wenn kein Sandbox-Fehler erkannt wurde) ---
         if (!empty($recentFiles)) {
             $this->agentStatusService->addStatus(
                 $sessionId,
@@ -125,7 +152,7 @@ final class AiAgentService
             );
 
             foreach (array_slice($recentFiles, 0, 5) as $file) {
-                $this->agentStatusService->addStatus($sessionId, "  • {$file}");
+                $this->agentStatusService->addStatus($sessionId, "  • {$file}");
             }
 
             $this->agentStatusService->addStatus($sessionId, '📦 Erstelle Deployment-Paket...');
@@ -133,6 +160,7 @@ final class AiAgentService
             $this->agentStatusService->addStatus($sessionId, '✅ Deployment-Paket erstellt');
             $this->agentStatusService->addStatus($sessionId, 'DEPLOYMENT:' . $deploymentResult);
         }
+        // ----------------------------------------------------------------------
 
         $this->agentStatusService->addStatus($sessionId, 'RESULT:' . $this->shortPreview($content, 300));
     }
@@ -302,7 +330,7 @@ final class AiAgentService
     }
 
     private function persistFailedPayload(string $sessionId, string $request, string $response, string $errorMessage, int $attempt): void
-    {
+    {  
         try {
             $this->conn->insert('failed_payloads', [
                 'session_id' => $sessionId,
@@ -315,6 +343,7 @@ final class AiAgentService
         } catch (\Throwable $e) {
             $this->logger->error('Failed to persist failed_payloads', ['session' => $sessionId, 'err' => $e->getMessage()]);
         }
+            
     }
 
     private function getRecentFiles(string $dir): array

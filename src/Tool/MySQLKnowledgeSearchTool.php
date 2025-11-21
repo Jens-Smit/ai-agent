@@ -33,7 +33,7 @@ final class MySQLKnowledgeSearchTool
         string $query,
         #[With(minimum: 1, maximum: 20)]
         int $limit = 5,
-        #[With(minimum: 0.0, maximum: 1.0)]
+        #[With(minimum: 0, maximum: 1)]
         float $minScore = 0.3
     ): string {
         $this->logger->info('MySQL Knowledge Search started', [
@@ -45,10 +45,24 @@ final class MySQLKnowledgeSearchTool
         try {
             // 1. Erstelle Embedding für die Query
             $result = $this->platform->invoke('text-embedding-004', $query);
-            $vectors = $result->asVectors();
+
+            // ANPASSUNG: Entferne die fehlerhafte Prüfung isSuccessful(), da DeferredResult sie nicht hat.
+            if (!$result) {
+                $this->logger->error('Embedding platform invocation failed: Result is null.', ['query' => $query]);
+                return "ERROR: Embedding service failed to return a result (null).";
+            }
+            
+            // Die asVectors()-Methode wird nun direkt aufgerufen. Fehler (falls vorhanden) 
+            // werden vom catch-Block abgefangen.
+            $vectors = $result->asVectors(); 
 
             if (empty($vectors)) {
                 return "ERROR: Could not create embedding for query.";
+            }
+
+            // Stelle sicher, dass der erste Vektor existiert
+            if (!isset($vectors[0])) {
+                return "ERROR: Embedding vector data is missing.";
             }
 
             $queryEmbedding = $vectors[0]->getData();
@@ -72,6 +86,11 @@ final class MySQLKnowledgeSearchTool
             );
 
             foreach ($results as $idx => $resultData) {
+                // Stelle sicher, dass 'document' und 'score' Schlüssel existieren
+                if (!isset($resultData['document']) || !isset($resultData['score'])) {
+                    continue; 
+                }
+
                 $doc = $resultData['document'];
                 $score = $resultData['score'];
 

@@ -28,6 +28,7 @@
     "nelmio/cors-bundle": "^2.5",
     "phpdocumentor/reflection-docblock": "^5.6",
     "phpstan/phpdoc-parser": "*",
+    "smalot/pdfparser": "^2.12",
     "symfony/ai-agent": "dev-main",
     "symfony/ai-bundle": "dev-main",
     "symfony/ai-chat": "dev-main",

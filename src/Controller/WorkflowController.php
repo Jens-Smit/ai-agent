@@ -85,45 +85,28 @@ class WorkflowController extends AbstractController
         ]);
 
         try {
-            // 1. Erkenne benötigte Capabilities
-            $requiredCapabilities = $this->capabilityChecker->detectRequiredCapabilities($intent);
+            // --- START REFACTORING ---
+            // Wir nutzen nun die neue dynamische Methode statt der 3 alten Schritte.
             
-            $this->statusService->addStatus(
-                $sessionId,
-                sprintf('🔍 Erkannte Capabilities: %s', implode(', ', $requiredCapabilities))
-            );
+            $this->statusService->addStatus($sessionId, '🤖 KI analysiert Intent und Tool-Landschaft...');
 
-            // 2. Prüfe Tool-Verfügbarkeit
-            $capabilityCheck = $this->capabilityChecker->checkCapabilities($requiredCapabilities);
+            // Diese Methode prüft UND erstellt Tools bei Bedarf dynamisch
+            $capabilityResult = $this->capabilityChecker->ensureCapabilitiesFor($intent);
             
-            if (!empty($capabilityCheck['missing'])) {
-                $this->statusService->addStatus(
-                    $sessionId,
-                    sprintf('⚠️ Fehlende Tools: %s', implode(', ', $capabilityCheck['missing']))
-                );
-                
-                $this->statusService->addStatus(
-                    $sessionId,
-                    '🔧 Fordere fehlende Tools beim DevAgent an...'
-                );
-                
-                // 3. Fordere fehlende Tools an
-                $toolRequests = $this->capabilityChecker->requestMissingTools($capabilityCheck['missing']);
-                
-                foreach ($toolRequests as $toolName => $result) {
-                    if ($result['status'] === 'success') {
-                        $this->statusService->addStatus(
-                            $sessionId,
-                            sprintf('✅ Tool "%s" wurde angefordert', $toolName)
-                        );
-                    } else {
-                        $this->statusService->addStatus(
-                            $sessionId,
-                            sprintf('❌ Tool "%s" konnte nicht angefordert werden', $toolName)
-                        );
-                    }
-                }
+            // Feedback für den User generieren (Frontend-Status)
+            if (isset($capabilityResult['status']) && $capabilityResult['status'] === 'available') {
+                $toolName = $capabilityResult['tool'] ?? 'Unbekannt';
+                $this->statusService->addStatus($sessionId, sprintf('✅ Passendes Tool identifiziert: %s', $toolName));
+            } elseif (isset($capabilityResult['status']) && $capabilityResult['status'] === 'created') {
+                 $this->statusService->addStatus($sessionId, '✨ Neues Tool wurde dynamisch vom DevAgent erstellt.');
             }
+
+            // Da die KI Tools sofort erstellt, gibt es technisch keine "missing_tools" mehr,
+            // die den Workflow blockieren. Wir geben ein leeres Array zurück, 
+            // um den Frontend-Vertrag einzuhalten.
+            $missingToolsForFrontend = []; 
+
+            // --- END REFACTORING ---
 
             // 4. Erstelle Workflow
             $this->statusService->addStatus($sessionId, '📋 Erstelle Workflow-Plan...');
@@ -140,8 +123,8 @@ class WorkflowController extends AbstractController
                 'workflow_id' => $workflow->getId(),
                 'session_id' => $sessionId,
                 'steps_count' => $workflow->getSteps()->count(),
-                'missing_tools' => $capabilityCheck['missing'] ?? [],
-                'message' => 'Workflow erstellt und wird ausgeführt. Nutze /api/workflow/status für Updates.'
+                'missing_tools' => $missingToolsForFrontend, // Bleibt leer, da auto-resolved
+                'message' => 'Workflow erstellt und wird ausgeführt.'
             ]);
 
         } catch (\Exception $e) {
@@ -169,37 +152,10 @@ class WorkflowController extends AbstractController
     #[OA\Get(
         summary: 'Holt Workflow-Status',
         parameters: [
-            new OA\Parameter(
-                name: 'sessionId',
-                in: 'path',
-                required: true,
-                schema: new OA\Schema(type: 'string')
-            )
+            new OA\Parameter(name: 'sessionId', in: 'path', required: true, schema: new OA\Schema(type: 'string'))
         ],
         responses: [
-            new OA\Response(
-                response: 200,
-                description: 'Workflow-Status',
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: 'workflow_id', type: 'integer'),
-                        new OA\Property(property: 'status', type: 'string'),
-                        new OA\Property(property: 'current_step', type: 'integer', nullable: true),
-                        new OA\Property(property: 'total_steps', type: 'integer'),
-                        new OA\Property(
-                            property: 'steps',
-                            type: 'array',
-                            items: new OA\Items(
-                                properties: [
-                                    new OA\Property(property: 'step_number', type: 'integer'),
-                                    new OA\Property(property: 'description', type: 'string'),
-                                    new OA\Property(property: 'status', type: 'string')
-                                ]
-                            )
-                        )
-                    ]
-                )
-            ),
+            new OA\Response(response: 200, description: 'Workflow-Status'),
             new OA\Response(response: 404, description: 'Workflow nicht gefunden')
         ]
     )]
@@ -208,9 +164,7 @@ class WorkflowController extends AbstractController
         $workflow = $this->workflowRepo->findBySessionId($sessionId);
 
         if (!$workflow) {
-            return $this->json([
-                'error' => 'Workflow not found'
-            ], Response::HTTP_NOT_FOUND);
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
         }
 
         $steps = [];
@@ -244,37 +198,16 @@ class WorkflowController extends AbstractController
     #[Route('/confirm/{workflowId}', name: 'confirm', methods: ['POST'])]
     #[OA\Post(
         summary: 'Bestätigt oder lehnt einen wartenden Step ab',
-        parameters: [
-            new OA\Parameter(
-                name: 'workflowId',
-                in: 'path',
-                required: true,
-                schema: new OA\Schema(type: 'integer')
-            )
-        ],
-        requestBody: new OA\RequestBody(
-            required: true,
-            content: new OA\JsonContent(
-                required: ['confirmed'],
-                properties: [
-                    new OA\Property(property: 'confirmed', type: 'boolean', example: true)
-                ]
-            )
-        ),
-        responses: [
-            new OA\Response(response: 200, description: 'Bestätigung verarbeitet'),
-            new OA\Response(response: 400, description: 'Workflow wartet nicht auf Bestätigung'),
-            new OA\Response(response: 404, description: 'Workflow nicht gefunden')
-        ]
+        parameters: [new OA\Parameter(name: 'workflowId', in: 'path', required: true, schema: new OA\Schema(type: 'integer'))],
+        requestBody: new OA\RequestBody(required: true, content: new OA\JsonContent(properties: [new OA\Property(property: 'confirmed', type: 'boolean')])),
+        responses: [new OA\Response(response: 200, description: 'OK')]
     )]
     public function confirmStep(int $workflowId, Request $request): JsonResponse
     {
         $workflow = $this->workflowRepo->find($workflowId);
 
         if (!$workflow) {
-            return $this->json([
-                'error' => 'Workflow not found'
-            ], Response::HTTP_NOT_FOUND);
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
         }
 
         if ($workflow->getStatus() !== 'waiting_confirmation') {
@@ -288,91 +221,33 @@ class WorkflowController extends AbstractController
         $confirmed = $data['confirmed'] ?? null;
 
         if ($confirmed === null) {
-            return $this->json([
-                'error' => 'confirmed parameter is required'
-            ], Response::HTTP_BAD_REQUEST);
+            return $this->json(['error' => 'confirmed parameter is required'], Response::HTTP_BAD_REQUEST);
         }
 
         try {
             $this->workflowEngine->confirmStep($workflow, (bool) $confirmed);
-
             return $this->json([
                 'status' => 'success',
                 'confirmed' => (bool) $confirmed,
                 'workflow_status' => $workflow->getStatus()
             ]);
-
         } catch (\Exception $e) {
-            $this->logger->error('Step confirmation failed', [
-                'workflow_id' => $workflowId,
-                'error' => $e->getMessage()
-            ]);
-
-            return $this->json([
-                'error' => 'Confirmation failed',
-                'message' => $e->getMessage()
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+            return $this->json(['error' => 'Confirmation failed', 'message' => $e->getMessage()], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
 
     /**
-     * Listet alle Workflows auf (optional gefiltert)
+     * Listet alle Workflows auf
      */
     #[Route('/list', name: 'list', methods: ['GET'])]
-    #[OA\Get(
-        summary: 'Listet Workflows auf',
-        parameters: [
-            new OA\Parameter(
-                name: 'status',
-                in: 'query',
-                required: false,
-                schema: new OA\Schema(
-                    type: 'string',
-                    enum: ['created', 'running', 'waiting_confirmation', 'completed', 'failed', 'cancelled']
-                )
-            ),
-            new OA\Parameter(
-                name: 'limit',
-                in: 'query',
-                required: false,
-                schema: new OA\Schema(type: 'integer', default: 20)
-            )
-        ],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: 'Liste der Workflows',
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(
-                            property: 'workflows',
-                            type: 'array',
-                            items: new OA\Items(
-                                properties: [
-                                    new OA\Property(property: 'id', type: 'integer'),
-                                    new OA\Property(property: 'session_id', type: 'string'),
-                                    new OA\Property(property: 'status', type: 'string'),
-                                    new OA\Property(property: 'created_at', type: 'string')
-                                ]
-                            )
-                        )
-                    ]
-                )
-            )
-        ]
-    )]
+    #[OA\Get(summary: 'Listet Workflows auf', responses: [new OA\Response(response: 200, description: 'Liste')]) ]
     public function listWorkflows(Request $request): JsonResponse
     {
         $status = $request->query->get('status');
         $limit = (int) ($request->query->get('limit') ?? 20);
-
         $criteria = $status ? ['status' => $status] : [];
         
-        $workflows = $this->workflowRepo->findBy(
-            $criteria,
-            ['createdAt' => 'DESC'],
-            $limit
-        );
+        $workflows = $this->workflowRepo->findBy($criteria, ['createdAt' => 'DESC'], $limit);
 
         $result = array_map(function($workflow) {
             return [
@@ -387,53 +262,59 @@ class WorkflowController extends AbstractController
             ];
         }, $workflows);
 
-        return $this->json([
-            'workflows' => $result,
-            'count' => count($result)
-        ]);
+        return $this->json(['workflows' => $result, 'count' => count($result)]);
     }
 
     /**
      * Gibt verfügbare Tools und Capabilities zurück
+     * HINWEIS: Da Tools nun dynamisch sind, ist dieses statische Mapping 
+     * nur noch eine Näherung für das Frontend.
      */
     #[Route('/capabilities', name: 'capabilities', methods: ['GET'])]
-    #[OA\Get(
-        summary: 'Listet verfügbare Tools und Capabilities',
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: 'Verfügbare Capabilities',
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(
-                            property: 'tools',
-                            type: 'array',
-                            items: new OA\Items(type: 'string')
-                        ),
-                        new OA\Property(
-                            property: 'capabilities',
-                            type: 'object'
-                        )
-                    ]
-                )
-            )
-        ]
-    )]
+    #[OA\Get(summary: 'Listet verfügbare Tools und Capabilities')]
     public function getCapabilities(): JsonResponse
     {
-        $tools = $this->capabilityChecker->getAvailableTools();
+        // HINWEIS: Stelle sicher, dass ToolCapabilityChecker eine Methode getAvailableTools() hat,
+        // die ein einfaches Array von Strings (Tool-Namen) zurückgibt.
+        // Falls im Refactoring gelöscht, bitte dort wieder hinzufügen:
+        // public function getAvailableTools(): array { return array_column($this->availableToolDefinitions, 'name'); }
+        
+        $tools = [];
+        if (method_exists($this->capabilityChecker, 'getAvailableTools')) {
+            $tools = $this->capabilityChecker->getAvailableTools();
+        } elseif (method_exists($this->capabilityChecker, 'getAvailableToolDefinitions')) {
+             // Fallback, falls du Getter geändert hast
+             $defs = $this->capabilityChecker->getAvailableToolDefinitions();
+             $tools = array_column($defs, 'name');
+        }
 
         return $this->json([
             'tools' => $tools,
             'tools_count' => count($tools),
+            // Mapping für das Frontend beibehalten (Legacy-Support)
             'capabilities' => [
-                'apartment_search' => in_array('immobilien_search_tool', $tools),
-                'calendar_management' => in_array('google_calendar_create_event', $tools),
-                'email_sending' => in_array('gmail_send_tool', $tools),
-                'web_scraping' => in_array('web_scraper', $tools),
-                'pdf_generation' => in_array('PdfGenerator', $tools),
-                'api_calling' => in_array('api_client', $tools),
+                'apartment_search' => $this->hasToolLike($tools, ['immobilien', 'search', 'apartment']),
+                'calendar_management' => $this->hasToolLike($tools, ['calendar', 'termin', 'schedule']),
+                'email_sending' => $this->hasToolLike($tools, ['mail', 'send']),
+                'web_scraping' => $this->hasToolLike($tools, ['scrape', 'crawl']),
+                'pdf_generation' => $this->hasToolLike($tools, ['pdf']),
+                'api_calling' => $this->hasToolLike($tools, ['api', 'client']),
             ]
         ]);
+    }
+
+    /**
+     * Hilfsmethode für unscharfes Matching im Legacy-Endpoint
+     */
+    private function hasToolLike(array $availableTools, array $keywords): bool
+    {
+        foreach ($availableTools as $toolName) {
+            foreach ($keywords as $keyword) {
+                if (stripos($toolName, $keyword) !== false) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

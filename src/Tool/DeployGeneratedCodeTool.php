@@ -220,7 +220,11 @@ final class DeployGeneratedCodeTool
         return [
             'version' => '1.0',
             'timestamp' => $timestamp,
-            'files' => $filesToDeploy,
+            'files' => array_map(function ($f) {
+                    // Fehlt "type"? Dann automatisch erkennen
+                    $f['type'] = $f['type'] ?? $this->detectFileType($f['target_path']);
+                    return $f;
+                }, $filesToDeploy),
             'analysis' => $analysis,
             'checksums' => $this->calculateChecksums($filesToDeploy, $sourceBaseDir),
             'php_version' => PHP_VERSION,

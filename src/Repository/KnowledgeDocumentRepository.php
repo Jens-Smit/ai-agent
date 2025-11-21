@@ -1,4 +1,4 @@
-<?php 
+<?php
 // src/Repository/KnowledgeDocumentRepository.php
 
 namespace App\Repository;
@@ -15,78 +15,77 @@ class KnowledgeDocumentRepository extends ServiceEntityRepository
     }
 
     /**
-     * Findet ähnliche Dokumente basierend auf Cosine-Similarity
-     * 
-     * @param array $queryEmbedding Das Query-Embedding als Array
-     * @param int $limit Anzahl der Ergebnisse
-     * @param float $minScore Minimale Similarity-Score (0-1)
-     * @return array Array von [document, score] Paaren
+     * Findet ähnliche Dokumente basierend auf Cosine-Similarity (Vektorsuche).
+     *
+     * @param array $queryEmbedding Das Query-Embedding als Array von Floats (erwartet 768 Dimensionen).
+     * @param int $limit Anzahl der Ergebnisse (Standard: 5).
+     * @param float $minScore Minimale Similarity-Score (0.0-1.0) (Standard: 0.3).
+     * @return array Array von [document, score] Paaren.
      */
-    public function findSimilar(array $queryEmbedding, int $limit = 5, float $minScore = 0.0): array
+    public function findSimilarFixed(array $queryEmbedding, int $limit = 5, float $minScore = 0.3): array
     {
-        // Baue den Cosine-Similarity SQL-Ausdruck
-        $embeddingJson = json_encode($queryEmbedding);
-        
-        $sql = "
-            SELECT 
-                k.*,
-                (
-                    -- Cosine Similarity Berechnung
-                    -- dot_product / (magnitude_a * magnitude_b)
-                    (
-                        SELECT SUM(
-                            JSON_EXTRACT(k.embedding, CONCAT('$[', idx.idx, ']')) * 
-                            JSON_EXTRACT(:query_embedding, CONCAT('$[', idx.idx, ']'))
-                        )
-                        FROM (
-                            SELECT 0 as idx UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL
-                            SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL
-                            SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9
-                            -- Erweitere dies bis zur Embedding-Dimension (z.B. 768 für text-embedding-004)
-                            -- Oder verwende eine gespeicherte Prozedur für dynamische Dimensionen
-                        ) as idx
-                        WHERE idx.idx < k.embedding_dimension
-                    ) / (
-                        SQRT(
-                            (SELECT SUM(
-                                POW(JSON_EXTRACT(k.embedding, CONCAT('$[', idx.idx, ']')), 2)
-                            ) FROM (SELECT 0 as idx UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) as idx WHERE idx.idx < k.embedding_dimension)
-                        ) *
-                        SQRT(
-                            (SELECT SUM(
-                                POW(JSON_EXTRACT(:query_embedding, CONCAT('$[', idx.idx, ']')), 2)
-                            ) FROM (SELECT 0 as idx UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) as idx WHERE idx.idx < k.embedding_dimension)
-                        )
-                    )
-                ) as similarity_score
-            FROM knowledge_documents k
-            HAVING similarity_score >= :min_score
-            ORDER BY similarity_score DESC
-            LIMIT :limit
-        ";
+        if (count($queryEmbedding) !== 768) {
+            throw new \InvalidArgumentException('Query embedding must have 768 dimensions for text-embedding-004 model.');
+        }
 
         $conn = $this->getEntityManager()->getConnection();
-        $stmt = $conn->prepare($sql);
-        
-        $results = $stmt->executeQuery([
-            'query_embedding' => $embeddingJson,
-            'min_score' => $minScore,
-            'limit' => $limit
-        ])->fetchAllAssociative();
 
+        // 1. Alle Dokumente abrufen, die überhaupt Embeddings haben
+        $sql = "
+            SELECT id, embedding_dimension, embedding
+            FROM knowledge_documents
+            WHERE embedding_dimension = 768
+        ";
+        $rows = $conn->executeQuery($sql)->fetchAllAssociative();
+
+        $results = [];
+
+        foreach ($rows as $row) {
+            $embedding = json_decode($row['embedding'], true);
+
+            if (!is_array($embedding) || count($embedding) !== 768) {
+                continue; // skip invalid embeddings
+            }
+
+            // 2. Cosine similarity berechnen
+            $dot = 0.0;
+            $normA = 0.0;
+            $normB = 0.0;
+            for ($i = 0; $i < 768; $i++) {
+                $dot += $queryEmbedding[$i] * $embedding[$i];
+                $normA += $queryEmbedding[$i] ** 2;
+                $normB += $embedding[$i] ** 2;
+            }
+            $similarity = $dot / (sqrt($normA) * sqrt($normB));
+
+            if ($similarity >= $minScore) {
+                $results[] = [
+                    'id' => $row['id'],
+                    'score' => $similarity
+                ];
+            }
+        }
+
+        // 3. Nach Score sortieren und limitieren
+        usort($results, fn($a, $b) => $b['score'] <=> $a['score']);
+        $results = array_slice($results, 0, $limit);
+
+        // 4. Entity-Objekte laden
         $documents = [];
-        foreach ($results as $row) {
-            $doc = $this->find($row['id']);
+        foreach ($results as $r) {
+            $doc = $this->find($r['id']);
             if ($doc) {
                 $documents[] = [
                     'document' => $doc,
-                    'score' => (float) $row['similarity_score']
+                    'score' => $r['score']
                 ];
             }
         }
 
         return $documents;
     }
+
+
 
     /**
      * Löscht alle Dokumente aus einer bestimmten Quelle
