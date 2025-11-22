@@ -41,6 +41,7 @@ ai:
     frontend_generator:
       platform: 'ai.platform.gemini'
       model: 'gemini-2.5-flash'
+        
       track_token_usage: true
       prompt:
         file: '%kernel.project_dir%/config/prompts/frontend_dev_prompt.txt'

@@ -1,11 +1,11 @@
 <?php
-// src/Service/AiAgentService.php (Gefixt)
-
-declare(strict_types=1);
-
+// src/Service/FrontendAgentService.php
 namespace App\Service;
 
-use App\Message\AiAgentJob;
+
+// WICHTIG: Korrigieren Sie den importierten Message-Typ
+// use App\Message\AiAgentJob; // ALT
+use App\Message\FrontendGeneratorJob; // NEU: Der dedizierte Job muss für Retries verwendet werden
 use App\Service\AgentStatusService;
 use App\Service\CircuitBreakerService;
 use App\Tool\DeployGeneratedCodeTool;
@@ -21,13 +21,17 @@ use Symfony\Contracts\HttpClient\Exception\HttpExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\ServerExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 
-final class AiAgentService
+/**
+ * Dedizierter Service zur Steuerung der AI-Agenten, die Frontend-Code generieren.
+ * Enthält die Retry- und Circuit-Breaker-Logik.
+ */
+final class FrontendAgentService
 {
     private const MAX_RETRIES = 10;
     private const BASE_DELAY_SECONDS = 10;
     private const MAX_BACKOFF_SECONDS = 300;
     private const MAX_TOTAL_SECONDS = 3600;
-    private const CIRCUIT_BREAKER_SERVICE = 'gemini_api';
+    private const CIRCUIT_BREAKER_SERVICE = 'gemini_api_frontend'; // Spezifischer Circuit Breaker für Frontend-Anfragen
 
     private const NON_RETRIABLE_ERRORS = [
         'invalid_api_key',
@@ -38,7 +42,8 @@ final class AiAgentService
     ];
 
     public function __construct(
-        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(service: 'ai.agent.file_generator')]
+        // WICHTIG: Hier muss ein spezifischer Agent für Frontend-Aufgaben injiziert werden.
+        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(service: 'ai.agent.frontend_generator')]
         private AgentInterface $agent,
         private LoggerInterface $logger,
         private AgentStatusService $agentStatusService,
@@ -48,14 +53,17 @@ final class AiAgentService
         private ?CircuitBreakerService $circuitBreaker = null
     ) {}
 
-    public function runPrompt(string $prompt, ?string $sessionId = null, int $attempt = 1): void
+    /**
+     * Führt den Prompt über den AI-Agenten aus und behandelt Retries und Fehler.
+     * * @param string $sessionId Dies ist die ID des aktuellen Jobs, die für Statusmeldungen verwendet wird.
+     */
+    public function runPrompt(string $prompt, string $sessionId, int $attempt = 1): void
     {
-        $sessionId = $sessionId ?: Uuid::v4()->toRfc4122();
         $startTime = time();
 
         if ($attempt === 1) {
             $this->agentStatusService->clearStatuses($sessionId);
-            $this->agentStatusService->addStatus($sessionId, '🚀 DevAgent Job gestartet');
+            $this->agentStatusService->addStatus($sessionId, '🚀 FrontendAgent Job gestartet');
             $this->agentStatusService->addStatus($sessionId, '📝 Prompt wird analysiert...');
         } else {
             $this->agentStatusService->addStatus($sessionId, sprintf('🔄 Retry-Versuch %d/%d', $attempt, self::MAX_RETRIES));
@@ -125,7 +133,7 @@ final class AiAgentService
             );
 
             foreach (array_slice($recentFiles, 0, 5) as $file) {
-                $this->agentStatusService->addStatus($sessionId, "  • {$file}");
+                $this->agentStatusService->addStatus($sessionId, "  • {$file}");
             }
 
             $this->agentStatusService->addStatus($sessionId, '📦 Erstelle Deployment-Paket...');
@@ -169,7 +177,7 @@ final class AiAgentService
                 sprintf('⏱️ Neuer Versuch in %ds (Attempt %d/%d)', $backoff, $attempt + 1, self::MAX_RETRIES)
             );
 
-            $this->logger->warning('Requeueing AiAgentJob', [
+            $this->logger->warning('Requeueing FrontendGeneratorJob', [
                 'session' => $sessionId,
                 'attempt' => $attempt,
                 'backoff' => $backoff,
@@ -185,7 +193,7 @@ final class AiAgentService
             'ERROR:' . $this->shortPreview($errorMessage, 300)
         );
 
-        $this->logger->error('AiAgentService unrecoverable error', [
+        $this->logger->error('FrontendAgentService unrecoverable error', [
             'session' => $sessionId,
             'attempt' => $attempt,
             'error' => $errorMessage,
@@ -196,7 +204,14 @@ final class AiAgentService
 
     private function requeueJob(string $prompt, string $sessionId, int $nextAttempt, int $delaySeconds): void
     {
-        $newMessage = new AiAgentJob($prompt, $sessionId, ['attempt' => $nextAttempt]);
+        // KORREKTUR: Verwenden Sie den spezifischen FrontendGeneratorJob für die Wiederholung.
+        // WICHTIG: Explizite Übergabe von 'null' für das 3. Konstruktor-Argument ($originSessionId), 
+        // um sicherzustellen, dass die $options (4. Argument) korrekt ankommen.
+        $newMessage = new FrontendGeneratorJob(
+            $prompt,
+            $sessionId,
+            ['attempt' => $nextAttempt]  // Optionen (jetzt das 4. Argument)
+        ); 
         $this->bus->dispatch($newMessage, [new DelayStamp($delaySeconds * 1000)]);
     }
 
@@ -208,8 +223,11 @@ final class AiAgentService
             default => self::BASE_DELAY_SECONDS * 8
         };
         $expo = min((int) ($baseDelay * (2 ** ($attempt - 1))), self::MAX_BACKOFF_SECONDS);
-        return (int) round(mt_rand(0, 1000) / 1000 * $expo);
+        // Zufällige Streuung (Jitter) hinzufügen
+        return (int) round($expo * (1 + (mt_rand(-1000, 1000) / 2000)));
     }
+
+    // --- Private Helper-Methoden (unverändert) ---
 
     private function extractContentSafely(mixed $result): string
     {
@@ -304,6 +322,8 @@ final class AiAgentService
     private function persistFailedPayload(string $sessionId, string $request, string $response, string $errorMessage, int $attempt): void
     {
         try {
+            // Wichtig: 'ai_agent' auf 'frontend_agent' ändern, wenn Sie separate Tabellen verwenden.
+            // Behalte 'failed_payloads' bei, wenn es generisch ist.
             $this->conn->insert('failed_payloads', [
                 'session_id' => $sessionId,
                 'request' => substr($request, 0, 65535),

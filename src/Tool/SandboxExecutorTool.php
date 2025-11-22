@@ -65,7 +65,7 @@ final class SandboxExecutorTool
 
         // normalize filename (prevent traversal) and validate
         $filename = trim(basename($filename));
-        if ($filename === '' || !preg_match('/^[^\/\\\\]+\.php$/i', $filename)) {
+        if ($filename === '' || !preg_match('/^[^\\/]+\.php$/i', $filename)) {
             $this->statusService->addStatus('❌ Ungültiger Dateiname: ' . (string) $filename);
             throw new \InvalidArgumentException('SandboxExecutorTool: invalid filename provided.');
         }
@@ -238,6 +238,8 @@ CORS_ALLOW_ORIGIN=*
 GEMINI_API_KEY=test_key
 OPENAI_API_KEY=test_key
 CLAUD_API_KEY=test_key
+GITHUB_ACCESS_TOKEN=dummy_github_access_token
+DEV_AGENT_GITHUB_REPO=dummy_owner/dummy_repo
 ENV;
 
         $this->filesystem->dumpFile($targetDir . '/.env.sandbox', $envContent);

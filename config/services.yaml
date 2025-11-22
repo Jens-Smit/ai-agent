@@ -33,7 +33,10 @@ services:
         arguments:
             $jwtManager: '@Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface'
             $userProvider: '@security.user.provider.concrete.app_user_provider'
-    
+    #MessageHandler
+    App\MessageHandler\:
+        resource: '../src/MessageHandler'
+        tags: ['messenger.message_handler']
     # Messenger Middleware
     App\Messenger\Middleware\CircuitBreakerMiddleware:
         arguments:
@@ -84,6 +87,18 @@ services:
     App\Service\AiAgentService:
         arguments:
             $agent: '@ai.agent.file_generator'
+            $logger: '@logger'
+            $agentStatusService: '@App\Service\AgentStatusService'
+            $deployTool: '@App\Tool\DeployGeneratedCodeTool'
+            $bus: '@messenger.default_bus'
+            $conn: '@doctrine.dbal.default_connection'
+            $circuitBreaker: '@App\Service\CircuitBreakerService'
+        tags:
+            - { name: 'monolog.logger', channel: 'ai_agent' }
+    # FrontendAgentService mit Circuit Breaker
+    App\Service\FrontendAgentService:
+        arguments:
+            $agent: '@ai.agent.frontend_generator'
             $logger: '@logger'
             $agentStatusService: '@App\Service\AgentStatusService'
             $deployTool: '@App\Tool\DeployGeneratedCodeTool'
@@ -144,6 +159,7 @@ services:
             # Manuelle Definition der Abhängigkeiten, falls autowire deaktiviert ist
             $kernel: '@kernel'
             $logger: '@logger'
+            $statusService: '@App\Service\AgentStatusService'
         tags:
             # WICHTIG: Manuelles Tagging für das AI-Bundle
             - { name: 'symfony.ai.tool', alias: 'run_code_in_sandbox' }

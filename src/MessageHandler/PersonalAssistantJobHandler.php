@@ -148,6 +148,7 @@ final class PersonalAssistantJobHandler
                                str_contains($errorMessage, 'UNAVAILABLE') ||
                                str_contains($errorMessage, 'overloaded') ||
                                str_contains($errorMessage, 'Response does not contain any content.');
+                               str_contains($errorMessage, 'Rate limit exceeded'); // <-- hier hinzufügen
 
                 $this->logger->info('🔍 Fehleranalyse', [
                     'is_retriable' => $isRetriable,

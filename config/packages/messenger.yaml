@@ -13,10 +13,10 @@ framework:
                     check_delayed_interval: 60000
                 retry_strategy:
                     max_retries: 3
-                    delay: 10000
-                    multiplier: 2
-                    max_delay: 300000
-                    
+                    delay: 10000          # 10s Startverzögerung
+                    multiplier: 2         # 10s -> 20s -> 40s
+                    max_delay: 300000     # max 5min
+
             personal_assistant_queue:
                 dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
                 options:
@@ -25,10 +25,10 @@ framework:
                     check_delayed_interval: 60000
                 retry_strategy:
                     max_retries: 5
-                    delay: 5000
-                    multiplier: 2
-                    max_delay: 60000
-                    
+                    delay: 10000
+                    multiplier: 2.5
+                    max_delay: 300000
+
             frontend_generator_queue:
                 dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
                 options:
@@ -36,19 +36,18 @@ framework:
                     use_notify: true
                     check_delayed_interval: 60000
                 retry_strategy:
-                    max_retries: 3
-                    delay: 15000
-                    multiplier: 2
-                    max_delay: 300000
-            
-            # High-Priority Queue für wichtige Tasks
+                    max_retries: 5           # mehr Versuche für API Rate Limits
+                    delay: 5000              # 5s Start
+                    multiplier: 2            # 5s -> 10s -> 20s -> ...
+                    max_delay: 120000        # max 2min, damit Frontend nicht ewig wartet
+
             high_priority:
                 dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
                 options:
                     queue_name: 'high_priority'
                     use_notify: true
                     check_delayed_interval: 30000
-                    
+
             failed: 'doctrine://default?queue_name=failed'
 
         default_bus: messenger.bus.default
@@ -65,7 +64,7 @@ framework:
             'App\Message\AiAgentJob': dev_agent_queue
             'App\Message\PersonalAssistantJob': personal_assistant_queue
             'App\Message\FrontendGeneratorJob': frontend_generator_queue
-            
+
             # Mailer bleibt synchron
             Symfony\Component\Notifier\Message\ChatMessage: high_priority
             Symfony\Component\Notifier\Message\SmsMessage: high_priority
