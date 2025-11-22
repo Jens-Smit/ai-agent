@@ -87,6 +87,8 @@ final class AiAgentService
 
         try {
             $this->agentStatusService->addStatus($sessionId, sprintf('🤖 AI-Agent wird aufgerufen (Versuch %d)', $attempt));
+            $this->logger->debug('AI-Agent wird aufgerufen mit Prompt', ['session' => $sessionId, 'prompt' => $prompt]);
+
             $result = $this->agent->call($messages);
 
             if ($this->circuitBreaker) {
@@ -143,6 +145,12 @@ final class AiAgentService
         $rawResponse = $this->tryExtractRawFromException($e) ?? '';
         $this->persistFailedPayload($sessionId, $prompt, $rawResponse, $errorMessage, $attempt);
 
+        // Log the full exception stack trace
+        $this->logger->debug('Error stack trace', [
+            'session' => $sessionId,
+            'exception' => (string) $e
+        ]);
+
         $isRetriable = $this->isTransientError($e);
         $isNonRetriable = $this->isNonRetriableError($errorMessage);
 
@@ -193,6 +201,9 @@ final class AiAgentService
             'is_non_retriable' => $isNonRetriable
         ]);
     }
+
+ 
+
 
     private function requeueJob(string $prompt, string $sessionId, int $nextAttempt, int $delaySeconds): void
     {

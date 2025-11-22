@@ -1,4 +1,7 @@
 <?php
+// src/Tool/SandboxExecutorTool.php
+
+declare(strict_types=1);
 
 namespace App\Tool;
 
@@ -82,6 +85,9 @@ final class SandboxExecutorTool
             $this->statusService->addStatus('📁 Erstelle vollständige Projektkopie...');
             $projectCloneDir = $this->createProjectClone();
 
+            // NEUE ZEILE: Sicherstellen, dass der var/pdf_output-Ordner existiert
+            $this->ensureSandboxOutputDirectories($projectCloneDir);
+
             $this->statusService->addStatus('📋 Kopiere generierten Code...');
             $this->copyGeneratedCodeToClone($projectCloneDir);
 
@@ -153,6 +159,18 @@ final class SandboxExecutorTool
         $this->copyDockerfile($cloneDir);
         
         return $cloneDir;
+    }
+
+    /**
+     * Sicherstellen, dass benötigte Output-Verzeichnisse im Sandbox-Clone existieren.
+     */
+    private function ensureSandboxOutputDirectories(string $cloneDir): void
+    {
+        $pdfOutputDir = $cloneDir . '/generated_code/var/pdf_output';
+        if (!$this->filesystem->exists($pdfOutputDir)) {
+            $this->logger->info('Creating sandbox PDF output directory', ['path' => $pdfOutputDir]);
+            $this->filesystem->mkdir($pdfOutputDir, 0777, true);
+        }
     }
 
     /**

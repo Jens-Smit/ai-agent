@@ -245,5 +245,13 @@ services:
             $userRepository: '@App\Repository\UserRepository'
             $logger: '@logger'
         tags: ['ai.tool']
+    # GitHubIssueManagerTool
+    App\Tool\GitHubIssueManagerTool:
+        arguments:
+            $httpClient: '@http_client'
+            $logger: '@logger'
+            $githubAccessToken: '%env(GITHUB_ACCESS_TOKEN)%'
+            $githubRepo: '%env(DEV_AGENT_GITHUB_REPO)%'
+        tags: ['ai.tool']
             
         

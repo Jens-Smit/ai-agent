@@ -34,6 +34,7 @@ ai:
         - 'App\Tool\WebScraperTool'
         - 'App\Tool\ApiClientTool'
         - 'App\Tool\MySQLKnowledgeSearchTool'
+        - 'App\Tool\GitHubIssueManagerTool'
         
         
       fault_tolerant_toolbox: true
