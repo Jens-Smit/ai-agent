@@ -52,9 +52,15 @@ services:
         tags:
             - { name: 'monolog.logger', channel: 'messenger' }
    
+        
+    ai.platform.huggingface:
+        class: Symfony\AI\Platform\PlatformInterface
+        # Die Factory-Methode erstellt die Instanz
+        factory: ['Symfony\AI\Platform\Bridge\HuggingFace\PlatformFactory', 'create']
+        arguments:
+            - '%env(HUGGINGFACE_API_KEY)%'
         ### Services & Tools ###
         ### Services ###
-
     # AgentStatusService mit EntityManager
     App\Service\AgentStatusService:
         arguments:
@@ -83,18 +89,7 @@ services:
         tags:
             - { name: 'monolog.logger', channel: 'circuit_breaker' }
 
-    # AiAgentService mit Circuit Breaker
-    App\Service\AiAgentService:
-        arguments:
-            $agent: '@ai.agent.file_generator'
-            $logger: '@logger'
-            $agentStatusService: '@App\Service\AgentStatusService'
-            $deployTool: '@App\Tool\DeployGeneratedCodeTool'
-            $bus: '@messenger.default_bus'
-            $conn: '@doctrine.dbal.default_connection'
-            $circuitBreaker: '@App\Service\CircuitBreakerService'
-        tags:
-            - { name: 'monolog.logger', channel: 'ai_agent' }
+    
     # FrontendAgentService mit Circuit Breaker
     App\Service\FrontendAgentService:
         arguments:
@@ -123,7 +118,29 @@ services:
             $logger: '@logger'
             $uploadDirectory: '%kernel.project_dir%/var/user_uploads'
 
+    # NEU: Fallback Agent Wrapper
+    App\Service\FallbackAgentWrapper:
+        arguments:
+            $primaryAgent: '@ai.agent.file_generator'
+            $fallbackAgent: '@ai.agent.file_generator_huggingface'
+            $logger: '@logger'
+            $statusService: '@App\Service\AgentStatusService'
+        tags:
+            - { name: 'monolog.logger', channel: 'ai_agent' }
 
+    # AiAgentService - jetzt mit FallbackWrapper
+    App\Service\AiAgentService:
+        arguments:
+            $agent: '@App\Service\FallbackAgentWrapper'  # Wrapper statt direktem Agent
+            $logger: '@logger'
+            $appDynamicAgent: '@ai.agent.file_generator'
+            $agentStatusService: '@App\Service\AgentStatusService'
+            $deployTool: '@App\Tool\DeployGeneratedCodeTool'
+            $bus: '@messenger.default_bus'
+            $conn: '@doctrine.dbal.default_connection'
+            $circuitBreaker: '@App\Service\CircuitBreakerService'
+        tags:
+            - { name: 'monolog.logger', channel: 'ai_agent' }
      
             ### Tools ###
 
@@ -150,7 +167,10 @@ services:
         arguments:
             $logger: '@logger'
             $entityManager: '@doctrine.orm.entity_manager'
-            $mailer: '@mailer' # Der Standard-Mailer wird hier übergeben, aber im Tool überschrieben
+            $mailer: '@mailer'
+            $security: '@security.helper'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $projectRootDir: '%kernel.project_dir%'
         tags: ['ai.tool']
  
     # SandboxExecutorTool
@@ -237,14 +257,39 @@ services:
             $logger: '@logger'
         tags: ['ai.tool']
 
-    # UserDocumentTool
-    App\Tool\UserDocumentTool:
+    # UserDocumentReadTool
+    App\Tool\UserDocumentReadTool:
         arguments:
-            $documentService: '@App\Service\UserDocumentService'
-            $documentRepo: '@App\Repository\UserDocumentRepository'
-            $userRepository: '@App\Repository\UserRepository'
             $logger: '@logger'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $documentService: '@App\Service\UserDocumentService'
+            $security: '@security.helper'
         tags: ['ai.tool']
+
+    # UserDocumentListTool
+    App\Tool\UserDocumentListTool:
+        arguments:
+            $logger: '@logger'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $security: '@security.helper'
+        tags: ['ai.tool']
+
+    # UserDocumentSearchTool
+    App\Tool\UserDocumentSearchTool:
+        arguments:
+            $logger: '@logger'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $security: '@security.helper'
+        tags: ['ai.tool']
+
+    # UserDocumentMetadataTool
+    App\Tool\UserDocumentMetadataTool:
+        arguments:
+            $logger: '@logger'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $security: '@security.helper'
+        tags: ['ai.tool']
+
     # GitHubIssueManagerTool
     App\Tool\GitHubIssueManagerTool:
         arguments:
@@ -252,6 +297,12 @@ services:
             $logger: '@logger'
             $githubAccessToken: '%env(GITHUB_ACCESS_TOKEN)%'
             $githubRepo: '%env(DEV_AGENT_GITHUB_REPO)%'
+        tags: ['ai.tool']
+      # BatchPdfGenerator  
+    App\Tool\BatchPdfGenerator:
+        arguments:
+            $logger: '@logger'
+            $baseOutputPath: '%kernel.project_dir%/var/generated_pdfs' # Or a suitable path for your environment
         tags: ['ai.tool']
             
         

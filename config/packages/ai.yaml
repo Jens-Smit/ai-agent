@@ -23,7 +23,7 @@ ai:
       model: 'gemini-2.5-flash'
       track_token_usage: true
       prompt:
-        file: '%kernel.project_dir%/config/prompts/file_generator_prompt.txt'
+        file: '%kernel.project_dir%/config/prompts/default_prompt.txt'
         include_tools: true
       tools:
         - 'App\Tool\CodeSaverTool'
@@ -58,9 +58,9 @@ ai:
         
       fault_tolerant_toolbox: true
       ### Alternative LLM Configurations for the File Generator Agent openAi ###
-    file_generator_openAi:
-      platform: 'ai.platform.openai'
-      model: 'gpt-3.5-turbo' # oder 'gpt-4-turbo', 'gpt-4o' etc.
+    file_generator_huggingface:
+      platform: 'ai.platform.gemini'
+      model: 'gemini-2.5-flash-lite'
       track_token_usage: true
       prompt:
         file: '%kernel.project_dir%/config/prompts/file_generator_prompt.txt'
@@ -73,6 +73,8 @@ ai:
         - 'App\Tool\DeployGeneratedCodeTool'
         - 'App\Tool\WebScraperTool'
         - 'App\Tool\ApiClientTool'
+        - 'App\Tool\MySQLKnowledgeSearchTool'
+        - 'App\Tool\GitHubIssueManagerTool'
       fault_tolerant_toolbox: true
     ### Alternative LLM Configurations for the File Generator Agent claude ###
     file_generator_claud:
@@ -100,11 +102,11 @@ ai:
         file: '%kernel.project_dir%/config/prompts/file_personal_assistent_prompt.txt'
         include_tools: true
       tools: 
-        #- 'App\Tool\CodeSaverTool'
-        #- 'App\Tool\KnowledgeIndexerTool'
-        #- 'App\Tool\AnalyzeCodeTool'
-        #- 'App\Tool\SandboxExecutorTool'
-        #- 'App\Tool\DeployGeneratedCodeTool'
+        #- 'App\Tool\CodeSaverTool'                       # nur für Code-Generierung
+        #- 'App\Tool\KnowledgeIndexerTool'                # nur für Code-Generierung
+        #- 'App\Tool\AnalyzeCodeTool'                     # nur für Code-Generierung
+        #- 'App\Tool\SandboxExecutorTool'                 # nur für Code-Generierung
+        #- 'App\Tool\DeployGeneratedCodeTool'             # nur für Code-Generierung
         - 'App\Tool\WebScraperTool'
         - 'App\Tool\ApiClientTool'
         - 'App\Tool\ToolRequestor'
@@ -113,14 +115,51 @@ ai:
         - 'App\Tool\GoogleCalendarCreateEventTool'
         - 'App\Tool\JobSearchTool'
         - 'App\Tool\SendMailTool'
-        #- 'App\Tool\ReceiveMailTool'
-        #- 'App\Tool\UserKnowledgeSearchTool'
-        #- 'App\Tool\AddUserKnowledgeTool'
-        #- 'App\Tool\UserDocumentTool'
+        - 'App\Tool\UserDocumentReadTool'
+        - 'App\Tool\UserDocumentListTool'
+        - 'App\Tool\UserDocumentSearchTool'
+        - 'App\Tool\UserDocumentMetadataTool'
+        #- 'App\Tool\ReceiveMailTool'                   #zum Testen deaktiviert
+        #- 'App\Tool\UserKnowledgeSearchTool'           #zum Testen deaktiviert
+        #- 'App\Tool\AddUserKnowledgeTool'              #zum Testen deaktiviert  
+                     
+        #- 'App\Tool\BatchPdfGenerator'                 #zum Testen deaktiviert
+
+       
+      fault_tolerant_toolbox: true
+      ### Alternative LLM Configurations for the File Generator Agent openAi ###
+    personal_assistent_openAi:
+      platform: 'ai.platform.openai'
+      model: 'gpt-4o-mini'
+      track_token_usage: true
+      prompt:
+        file: '%kernel.project_dir%/config/prompts/file_personal_assistent_prompt.txt'
+        include_tools: true
+      tools: 
+        #- 'App\Tool\CodeSaverTool'                       # nur für Code-Generierung
+        #- 'App\Tool\KnowledgeIndexerTool'                # nur für Code-Generierung
+        #- 'App\Tool\AnalyzeCodeTool'                     # nur für Code-Generierung
+        #- 'App\Tool\SandboxExecutorTool'                 # nur für Code-Generierung
+        #- 'App\Tool\DeployGeneratedCodeTool'             # nur für Code-Generierung
+        - 'App\Tool\WebScraperTool'
+        - 'App\Tool\ApiClientTool'
+        - 'App\Tool\ToolRequestor'
+        - 'App\Tool\PdfGenerator'
+        - 'App\Tool\MySQLKnowledgeSearchTool'
+        - 'App\Tool\GoogleCalendarCreateEventTool'
+        - 'App\Tool\JobSearchTool'
+        - 'App\Tool\SendMailTool'
+        #- 'App\Tool\ReceiveMailTool'                   #zum Testen deaktiviert
+        #- 'App\Tool\UserKnowledgeSearchTool'           #zum Testen deaktiviert
+        #- 'App\Tool\AddUserKnowledgeTool'              #zum Testen deaktiviert  
+       
+        #- 'App\Tool\BatchPdfGenerator'                 #zum Testen deaktiviert
+        
 
        
       fault_tolerant_toolbox: true
       ### Alternative LLM Configurations for the File Generator Agent openAi ###
     
+
 
 

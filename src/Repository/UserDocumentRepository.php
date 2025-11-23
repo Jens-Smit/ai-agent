@@ -76,7 +76,7 @@ class UserDocumentRepository extends ServiceEntityRepository
     /**
      * Sucht in Dokumenten (Name, Beschreibung, extrahierter Text)
      */
-    public function searchByUser(User $user, string $searchTerm, int $limit = 20): array
+    public function searchByUser(User $user, string $searchTerm, ?string $category, int $limit = 20): array
     {
         return $this->createQueryBuilder('d')
             ->where('d.user = :user')

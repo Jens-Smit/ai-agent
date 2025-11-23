@@ -1,5 +1,5 @@
 <?php
-// src/Service/AiAgentService.php (Gefixt)
+// src/Service/AiAgentService.php - KOMPLETT GEFIXT
 
 declare(strict_types=1);
 
@@ -8,18 +8,20 @@ namespace App\Service;
 use App\Message\AiAgentJob;
 use App\Service\AgentStatusService;
 use App\Service\CircuitBreakerService;
+use App\Service\FallbackAgentWrapper; 
 use App\Tool\DeployGeneratedCodeTool;
 use Doctrine\DBAL\Connection;
 use Psr\Log\LoggerInterface;
 use Symfony\AI\Agent\AgentInterface;
 use Symfony\AI\Platform\Message\Message;
 use Symfony\AI\Platform\Message\MessageBag;
-use Symfony\Component\Messenger\MessageBusInterface;
-use Symfony\Component\Messenger\Stamp\DelayStamp;
-use Symfony\Component\Uid\Uuid;
 use Symfony\Contracts\HttpClient\Exception\HttpExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\ServerExceptionInterface;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
+use Symfony\Component\Messenger\MessageBusInterface;
+use Symfony\Component\Messenger\Stamp\DelayStamp;
+use Symfony\Component\Uid\Uuid;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class AiAgentService
 {
@@ -38,8 +40,10 @@ final class AiAgentService
     ];
 
     public function __construct(
-        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(service: 'ai.agent.file_generator')]
-        private AgentInterface $agent,
+        // $agent: '@App\Service\FallbackAgentWrapper'
+        private FallbackAgentWrapper $agent, // Fix: Use concrete type if FallbackAgentWrapper is used as the primary agent
+        #[Autowire(service: 'ai.agent.file_generator_agent')]
+        private AgentInterface $appDynamicAgent,
         private LoggerInterface $logger,
         private AgentStatusService $agentStatusService,
         private DeployGeneratedCodeTool $deployTool,
@@ -48,10 +52,14 @@ final class AiAgentService
         private ?CircuitBreakerService $circuitBreaker = null
     ) {}
 
-    public function runPrompt(string $prompt, ?string $sessionId = null, int $attempt = 1): void
+    /**
+     * @param int $attempt Dieser Parameter ist redundant, da $options['attempt'] verwendet wird. Er wird beibehalten, um die Aufrufer nicht zu brechen.
+     */
+    public function runPrompt(string $prompt, ?string $sessionId = null, int $attempt = 1, array $options = []): void
     {
         $sessionId = $sessionId ?: Uuid::v4()->toRfc4122();
         $startTime = time();
+        $attempt = $options['attempt'] ?? 1; // Priorisiere den Wert aus $options
 
         if ($attempt === 1) {
             $this->agentStatusService->clearStatuses($sessionId);
@@ -79,17 +87,40 @@ final class AiAgentService
             ]);
 
             $delay = ($status['timeout'] ?? 60) + $this->computeBackoff($attempt);
-            $this->requeueJob($prompt, $sessionId, $attempt, $delay);
+            // Übergabe der Optionen für den Retry
+            $this->requeueJob($prompt, $sessionId, $options, $delay); 
             return;
         }
 
-        $messages = new MessageBag(Message::ofUser($prompt));
+        $messages = new MessageBag();
+        
+        // 2. Prüfen, ob ein System Prompt überschrieben werden soll
+        $callOptions = $options;
+        if (isset($options['system_prompt'])) {
+            // Füge den System Prompt als System Message hinzu
+            $messages = $messages->with(Message::forSystem($options['system_prompt']));
+            
+            // WICHTIG: Entferne den Schlüssel, damit er NICHT an die AI-Plattform als Option geht!
+            unset($callOptions['system_prompt']);
+        }
+        
+        // 3. Füge die User Message hinzu
+        $messages = $messages->with(Message::ofUser($prompt));
 
         try {
             $this->agentStatusService->addStatus($sessionId, sprintf('🤖 AI-Agent wird aufgerufen (Versuch %d)', $attempt));
-            $this->logger->debug('AI-Agent wird aufgerufen mit Prompt', ['session' => $sessionId, 'prompt' => $prompt]);
+            $this->logger->debug('AI-Agent wird aufgerufen mit Prompt', ['session' => $sessionId, 'prompt' => $prompt, 'options' => $options]);
 
-            $result = $this->agent->call($messages);
+            // WICHTIG: Übergabe der dynamischen Optionen ($options) an AgentInterface::call()
+            
+            unset($callOptions['attempt']); // Entfernt den internen Retry-Zähler
+
+            // Falls Sie $options['prompt'] noch irgendwo verwenden, entfernen Sie es auch hier
+            // unset($callOptions['prompt']); 
+
+            $this->logger->debug('AI-Agent wird aufgerufen mit bereinigten Optionen', ['callOptions' => $callOptions]);
+
+            $result = $this->appDynamicAgent->call($messages, $callOptions);
 
             if ($this->circuitBreaker) {
                 $this->circuitBreaker->recordSuccess(self::CIRCUIT_BREAKER_SERVICE);
@@ -104,7 +135,8 @@ final class AiAgentService
             $this->handleSuccess($sessionId, $content);
 
         } catch (\Throwable $e) {
-            $this->handleError($e, $prompt, $sessionId, $attempt);
+            // FIX: Übergabe des vollständigen $options-Arrays zur Beibehaltung des System Prompts
+            $this->handleError($e, $prompt, $sessionId, $options);
         }
     }
 
@@ -127,7 +159,7 @@ final class AiAgentService
             );
 
             foreach (array_slice($recentFiles, 0, 5) as $file) {
-                $this->agentStatusService->addStatus($sessionId, "  • {$file}");
+                $this->agentStatusService->addStatus($sessionId, "  • {$file}");
             }
 
             $this->agentStatusService->addStatus($sessionId, '📦 Erstelle Deployment-Paket...');
@@ -139,13 +171,14 @@ final class AiAgentService
         $this->agentStatusService->addStatus($sessionId, 'RESULT:' . $this->shortPreview($content, 300));
     }
 
-    private function handleError(\Throwable $e, string $prompt, string $sessionId, int $attempt): void
+    // FIX: Signatur aktualisiert, um $options zu empfangen und $attempt intern zu extrahieren
+    private function handleError(\Throwable $e, string $prompt, string $sessionId, array $options): void
     {
+        $attempt = $options['attempt'] ?? 1;
         $errorMessage = $e->getMessage() ?? get_class($e);
         $rawResponse = $this->tryExtractRawFromException($e) ?? '';
         $this->persistFailedPayload($sessionId, $prompt, $rawResponse, $errorMessage, $attempt);
 
-        // Log the full exception stack trace
         $this->logger->debug('Error stack trace', [
             'session' => $sessionId,
             'exception' => (string) $e
@@ -158,8 +191,6 @@ final class AiAgentService
             if (stripos($errorMessage, 'soft_empty_response') !== false) {
                 if (method_exists($this->circuitBreaker, 'recordSoftFailure')) {
                     $this->circuitBreaker->recordSoftFailure(self::CIRCUIT_BREAKER_SERVICE);
-                } else {
-                    $this->logger->warning('CircuitBreaker: soft failure ignored (missing method)');
                 }
             } else {
                 $this->circuitBreaker->recordFailure(self::CIRCUIT_BREAKER_SERVICE);
@@ -184,7 +215,8 @@ final class AiAgentService
                 'error' => $errorMessage,
             ]);
 
-            $this->requeueJob($prompt, $sessionId, $attempt + 1, $backoff);
+            // FIX: Übergabe des vollständigen $options-Arrays an requeueJob
+            $this->requeueJob($prompt, $sessionId, $options, $backoff);
             return;
         }
 
@@ -202,13 +234,16 @@ final class AiAgentService
         ]);
     }
 
- 
-
-
-    private function requeueJob(string $prompt, string $sessionId, int $nextAttempt, int $delaySeconds): void
+    // FIX: Signatur aktualisiert, um $options zu empfangen und den Versuchswert zu aktualisieren
+    private function requeueJob(string $prompt, string $sessionId, array $options, int $delaySeconds): void
     {
-        $newMessage = new AiAgentJob($prompt, $sessionId, ['attempt' => $nextAttempt]);
+        // $options enthält die ursprünglichen Overrides (z.B. System Prompt File).
+        // Wir aktualisieren 'attempt' für den Retry.
+        $options['attempt'] = ($options['attempt'] ?? 1) + 1;
+        
+        $newMessage = new AiAgentJob($prompt, $sessionId, $options); 
         $this->bus->dispatch($newMessage, [new DelayStamp($delaySeconds * 1000)]);
+        $this->logger->info("Job wird in {$delaySeconds}s neu eingeplant. Nächster Versuch: " . $options['attempt']);
     }
 
     private function computeBackoff(int $attempt): int

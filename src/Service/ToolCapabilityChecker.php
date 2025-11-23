@@ -9,16 +9,13 @@ use App\Tool\ToolRequestor;
 use Psr\Log\LoggerInterface;
 use Symfony\AI\Agent\Agent;
 use Symfony\AI\Agent\Toolbox\Toolbox;
-use Symfony\AI\Agent\Toolbox\FaultTolerantToolbox;
 use Symfony\AI\Platform\Message\Message;
 use Symfony\AI\Platform\Message\MessageBag;
 use Symfony\AI\Platform\PlatformInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
- * Dynamic Tool Capability Checker
- * * Nutzt einen internen Agenten, um User-Intent gegen verfügbare Tools zu matchen
- * und bei Bedarf dynamisch neue Tools zu spezifizieren.
+ * Dynamic Tool Capability Checker mit verbesserter Multi-Tool-Erkennung
  */
 final class ToolCapabilityChecker
 {
@@ -28,7 +25,6 @@ final class ToolCapabilityChecker
         #[Autowire(service: 'ai.fault_tolerant_toolbox.personal_assistent.inner')]
         private Toolbox $toolbox,
         
-        // KORREKTUR: Wir injizieren die Platform statt eines nicht existierenden ChatModels
         #[Autowire(service: 'ai.traceable_platform.gemini')]
         private PlatformInterface $platform,
         
@@ -43,51 +39,78 @@ final class ToolCapabilityChecker
      */
     public function ensureCapabilitiesFor(string $userIntent): array
     {
-        // 1. LLM fragen: Haben wir das Tool schon?
+        // 1. LLM fragen: Haben wir die nötigen Tools?
         $analysis = $this->analyzeToolAvailability($userIntent);
 
-        if ($analysis['has_tool'] ?? false) {
-            $this->logger->info('Matching tool found', ['tool' => $analysis['tool_name']]);
-            return ['status' => 'available', 'tool' => $analysis['tool_name']];
+        // VERBESSERT: Prüfe auf tool_combination (mehrere Tools)
+        if ($analysis['has_capability'] ?? false) {
+            if (isset($analysis['tool_combination']) && is_array($analysis['tool_combination'])) {
+                $this->logger->info('Tool combination found', [
+                    'tools' => $analysis['tool_combination']
+                ]);
+                return [
+                    'status' => 'available',
+                    'tools' => $analysis['tool_combination'],
+                    'reasoning' => $analysis['reasoning'] ?? ''
+                ];
+            }
+            
+            if (isset($analysis['tool_name'])) {
+                $this->logger->info('Single tool found', ['tool' => $analysis['tool_name']]);
+                return [
+                    'status' => 'available',
+                    'tool' => $analysis['tool_name'],
+                    'reasoning' => $analysis['reasoning'] ?? ''
+                ];
+            }
         }
 
         // 2. Wenn nicht: Tool dynamisch anfordern
-        $this->logger->info('No matching tool found. Requesting creation.', ['intent' => $userIntent]);
+        $this->logger->info('No matching tools found. Requesting creation.', [
+            'intent' => $userIntent
+        ]);
         $techDescription = $analysis['missing_logic_description'] ?? "Tool logic for: $userIntent";
         
         return $this->requestDynamicToolCreation($userIntent, $techDescription);
     }
 
     /**
-     * Erstellt einen Ad-Hoc Agenten, um zu prüfen, ob der Intent lösbar ist.
+     * Erstellt einen Ad-Hoc Agenten mit verbessertem Prompt
      */
     private function analyzeToolAvailability(string $userIntent): array
     {
-        // Liste der Tools für den Prompt vorbereiten
         $toolDescriptions = json_encode($this->availableToolDefinitions, JSON_PRETTY_PRINT);
 
-        // System Prompt definieren
+        // VERBESSERTER System Prompt
         $systemPrompt = <<<PROMPT
-        Du bist ein intelligenter System-Architekt für eine Symfony AI Anwendung.
+        Du bist ein intelligenter Tool-Analyst für eine Symfony AI Anwendung.
         
         VERFÜGBARE TOOLS:
         $toolDescriptions
         
         AUFGABE:
-        Prüfe, ob eines der verfügbaren Tools den untenstehenden User Intent funktional erfüllen kann.
-        Achte auf die BESCHREIBUNG, nicht nur auf den Namen.
+        Analysiere, ob der User Intent mit den VORHANDENEN Tools erfüllt werden kann.
         
-        ANTWORTE NUR IM JSON-FORMAT (ohne Markdown ```json ... ```):
+        WICHTIGE REGELN:
+        1. Prüfe die BESCHREIBUNG der Tools, nicht nur den Namen
+        2. MEHRERE Tools können KOMBINIERT werden, um komplexe Aufgaben zu lösen
+        3. Nur wenn WIRKLICH KEINE Kombination möglich ist, gib has_capability: false zurück
+        
+        BEISPIELE FÜR TOOL-KOMBINATIONEN:
+        - "Dokument lesen und PDF erstellen" → UserDocumentTool + PdfGenerator
+        - "Webseite scrapen und Email senden" → WebScraperTool + SendMailTool
+        - "Kalender-Event nach Jobsuche erstellen" → JobSearchTool + GoogleCalendarCreateEventTool
+        
+        ANTWORTE NUR IM JSON-FORMAT (ohne Markdown):
         {
-            "has_tool": boolean,
-            "tool_name": "Name des Tools oder null",
-            "reasoning": "Kurze Begründung",
-            "missing_logic_description": "Falls has_tool false ist: Eine präzise technische Beschreibung für einen Entwickler, was das neue Tool tun muss."
+            "has_capability": boolean,
+            "tool_name": "Name des Tools (falls nur 1 Tool)" oder null,
+            "tool_combination": ["Tool1", "Tool2", ...] oder null,
+            "reasoning": "Kurze Begründung, warum diese Tools ausreichen",
+            "missing_logic_description": "Nur falls has_capability false: Was fehlt konkret?"
         }
         PROMPT;
 
-        // KORREKTUR: Wir nutzen die Agent Klasse direkt wie in der Doku "Basic Usage"
-        // Wir nutzen hier ein schnelles Modell (Flash) für diese interne Logik-Prüfung
         $checkerAgent = new Agent($this->platform, 'gemini-2.5-flash');
 
         $messages = new MessageBag(
@@ -99,18 +122,37 @@ final class ToolCapabilityChecker
             $result = $checkerAgent->call($messages);
             $content = $result->getContent();
             
-            // Markdown-Code-Blöcke entfernen, falls das LLM welche sendet
+            // Markdown-Blöcke entfernen
             $content = str_replace(['```json', '```'], '', $content);
+            $content = trim($content);
             
-            return json_decode($content, true) ?? [];
+            $decoded = json_decode($content, true);
+            
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->error('JSON decode failed', [
+                    'content' => $content,
+                    'error' => json_last_error_msg()
+                ]);
+                return $this->getFallbackResponse($userIntent);
+            }
+            
+            return $decoded;
+            
         } catch (\Exception $e) {
             $this->logger->error('LLM Analysis failed', ['error' => $e->getMessage()]);
-            // Fallback: Wir nehmen an, wir haben das Tool nicht
-            return [
-                'has_tool' => false, 
-                'missing_logic_description' => "Create a tool capable of handling: $userIntent"
-            ];
+            return $this->getFallbackResponse($userIntent);
         }
+    }
+
+    /**
+     * Fallback bei LLM-Fehlern
+     */
+    private function getFallbackResponse(string $userIntent): array
+    {
+        return [
+            'has_capability' => false, 
+            'missing_logic_description' => "Create a tool capable of handling: $userIntent"
+        ];
     }
 
     /**
@@ -148,6 +190,7 @@ final class ToolCapabilityChecker
             $this->logger->error('Failed to load tools', ['error' => $e->getMessage()]);
         }
     }
+    
     public function getAvailableToolDefinitions(): array
     {
         return $this->availableToolDefinitions;

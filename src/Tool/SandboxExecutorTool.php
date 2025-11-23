@@ -60,10 +60,13 @@ final class SandboxExecutorTool
      */
     public function __invoke(
         #[With(pattern: '/^[^\\\\/]+\\.php$/i')]
-        string $filename,
+        string $filename = '',  
         string $updatePackageName = 'UpdatePackage',
         bool $includeDatabase = false
     ): string {
+        if (empty($filename)) {
+            return 'ERROR: filename parameter is required. Please provide a PHP filename to execute.';
+        }
         $this->statusService->addStatus('🚀 Sandbox-Ausführung gestartet');
 
         // normalize filename (prevent traversal) and validate

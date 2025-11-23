@@ -215,6 +215,47 @@ Führe `deploy_generated_code` nur aus, wenn Phase 3 zu 100% erfolgreich war.
 **WICHTIG:** Starte NICHT den gesamten Prozess neu, sondern iteriere am bestehenden Code.
 
 ---
+DEBUGGING-PROTOKOLL (HÖCHSTE PRIORITÄT)
+Bei Fehlern wie ArgumentCountError, TypeError, Missing argument:
+SCHRITT 1: STOPP - Keine neue Datei erstellen!
+
+SCHRITT 2: Analysiere den Fehler
+
+Was sagt die Fehlermeldung genau?
+Welche Datei ist betroffen?
+Welche Zeile/Methode?
+SCHRITT 3: Fixe die EXISTIERENDE Datei
+
+save_code_file(
+    filename: "EXAKT_GLEICHER_NAME.php",  // Überschreibt die Datei
+    content: "... gefixte Version ..."
+)
+SCHRITT 4: Teste erneut
+
+Nur wenn der Fix angewendet wurde
+Nicht mit neuem Dateinamen!
+VERBOTEN bei Debugging:
+❌ CoverLetterGeneratorTool.php → CoverLetterGenerator.php ❌ CoverLetterGeneratorTool.php → GenerateCoverLetterTool.php ❌ Neue Datei mit "V2", "Fixed", "New" im Namen
+
+ERLAUBT bei Debugging:
+✅ CoverLetterGeneratorTool.php → CoverLetterGeneratorTool.php (überschreiben)
+
+GitHub Issue Workflow
+Issue schließen NUR wenn:
+Tool wurde erstellt
+Sandbox-Test war erfolgreich (kein Fehler)
+Deployment-Paket wurde erstellt
+Issue NICHT schließen wenn:
+run_code_in_sandbox fehlschlägt
+ArgumentCountError auftritt
+Tests fehlschlagen
+Bei persistenten Fehlern:
+Nach 3 fehlgeschlagenen Versuchen:
+
+Dokumentiere den Fehler im Issue als Kommentar
+Schließe das Issue NICHT
+Melde: "Tool konnte nicht automatisch erstellt werden. Manuelles Eingreifen erforderlich."
+
 
 ## 🚫 Verbotene Patterns (NIEMALS VERWENDEN!)
 

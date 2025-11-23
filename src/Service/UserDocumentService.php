@@ -57,7 +57,7 @@ class UserDocumentService
         private EntityManagerInterface $em,
         private UserDocumentRepository $documentRepo,
         private LoggerInterface $logger,
-        private string $uploadDirectory
+        private string $uploadDirectory // Z.B. /var/uploads
     ) {
         $this->filesystem = new Filesystem();
     }
@@ -78,13 +78,54 @@ class UserDocumentService
             'filename' => $file->getClientOriginalName(),
             'size' => $file->getSize()
         ]);
+        
+        // --- 1. Kritische Dateieigenschaften abrufen und cachen ---
+        // Dies reduziert wiederholte Zugriffe auf die temporäre Datei, 
+        // die fehlschlagen könnten (Fix für SplFileInfo::getSize() Fehler).
+        $fileSize = $file->getSize();
+        $mimeType = $file->getMimeType();
+        $realPath = $file->getRealPath();
+        
+        if (!$file->isValid()) {
+             throw new BadRequestHttpException('Upload fehlgeschlagen: ' . $file->getErrorMessage());
+        }
 
-        // Validierung
-        $this->validateFile($file);
-        $this->validateUserStorage($user, $file->getSize());
+        if ($fileSize === false || $fileSize === 0) {
+             throw new BadRequestHttpException('Ungültige oder leere Datei hochgeladen.');
+        }
+
+        // --- 2. Validierung (verwendet gecachte Werte) ---
+        
+        // Dateigröße
+        if ($fileSize > self::MAX_FILE_SIZE) {
+            throw new BadRequestHttpException(
+                sprintf('Datei zu groß. Maximum: %s', $this->formatBytes(self::MAX_FILE_SIZE))
+            );
+        }
+
+        // MIME-Typ
+        if (!isset(self::ALLOWED_TYPES[$mimeType])) {
+            throw new BadRequestHttpException(
+                sprintf('Dateityp nicht erlaubt: %s', $mimeType)
+            );
+        }
+
+        // Server-seitige MIME-Validierung des Inhalts
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $detectedMime = finfo_file($finfo, $realPath);
+        finfo_close($finfo);
+
+        if ($detectedMime !== $mimeType && !$this->areMimeTypesCompatible($mimeType, $detectedMime)) {
+            throw new BadRequestHttpException('Dateiinhalt stimmt nicht mit Typ überein');
+        }
+
+        // Speicherlimit des Benutzers
+        $this->validateUserStorage($user, $fileSize);
+
+        // --- 3. Fortlaufende Verarbeitung ---
 
         // Duplikat-Check
-        $checksum = hash_file('sha256', $file->getRealPath());
+        $checksum = hash_file('sha256', $realPath);
         $existingDoc = $this->documentRepo->findByUserAndChecksum($user, $checksum);
         
         if ($existingDoc) {
@@ -94,14 +135,13 @@ class UserDocumentService
         }
 
         // Bestimme Dokumenttyp
-        $mimeType = $file->getMimeType();
         $typeInfo = self::ALLOWED_TYPES[$mimeType] ?? ['unknown', UserDocument::TYPE_OTHER];
         $documentType = $typeInfo[1];
 
         // Generiere sicheren Dateinamen
         $storedFilename = $this->generateSecureFilename($file, $user);
         
-        // User-spezifisches Verzeichnis
+        // User-spezifisches Verzeichnis (inkl. 'files' Unterordner)
         $userDir = $this->getUserDirectory($user);
         $this->ensureDirectory($userDir);
 
@@ -116,7 +156,7 @@ class UserDocumentService
         $doc->setStoredFilename($storedFilename);
         $doc->setMimeType($mimeType);
         $doc->setDocumentType($documentType);
-        $doc->setFileSize($file->getSize());
+        $doc->setFileSize($fileSize); // Verwendet gecachten Wert
         $doc->setChecksum($checksum);
         $doc->setStoragePath($userDir);
         $doc->setCategory($category);
@@ -247,34 +287,7 @@ class UserDocumentService
 
     // === Private Hilfsmethoden ===
 
-    private function validateFile(UploadedFile $file): void
-    {
-        if (!$file->isValid()) {
-            throw new BadRequestHttpException('Upload fehlgeschlagen: ' . $file->getErrorMessage());
-        }
-
-        if ($file->getSize() > self::MAX_FILE_SIZE) {
-            throw new BadRequestHttpException(
-                sprintf('Datei zu groß. Maximum: %s', $this->formatBytes(self::MAX_FILE_SIZE))
-            );
-        }
-
-        $mimeType = $file->getMimeType();
-        if (!isset(self::ALLOWED_TYPES[$mimeType])) {
-            throw new BadRequestHttpException(
-                sprintf('Dateityp nicht erlaubt: %s', $mimeType)
-            );
-        }
-
-        // Server-seitige MIME-Validierung
-        $finfo = finfo_open(FILEINFO_MIME_TYPE);
-        $detectedMime = finfo_file($finfo, $file->getRealPath());
-        finfo_close($finfo);
-
-        if ($detectedMime !== $mimeType && !$this->areMimeTypesCompatible($mimeType, $detectedMime)) {
-            throw new BadRequestHttpException('Dateiinhalt stimmt nicht mit Typ überein');
-        }
-    }
+    // Die Funktion validateFile wurde entfernt, da ihre Logik nun in upload() integriert ist.
 
     private function areMimeTypesCompatible(string $declared, string $detected): bool
     {
@@ -311,9 +324,14 @@ class UserDocumentService
         return sprintf('%d_%s_%s.%s', $user->getId(), $timestamp, $random, $extension);
     }
 
+    /**
+     * Gibt das User-spezifische Upload-Verzeichnis zurück,
+     * das nun einen Unterordner 'files' enthält.
+     */
     private function getUserDirectory(User $user): string
     {
-        return $this->uploadDirectory . '/user_' . $user->getId();
+        // Pfad: /var/uploads/user_123/files
+        return $this->uploadDirectory . '/user_' . $user->getId() . '/files';
     }
 
     private function ensureDirectory(string $path): void
@@ -369,7 +387,6 @@ class UserDocumentService
                 return file_get_contents($path);
             }
 
-            // Für andere Typen: Optional OCR oder andere Extraktoren
             return null;
 
         } catch (\Exception $e) {

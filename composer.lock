@@ -4504,12 +4504,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/symfony/ai-platform.git",
-                "reference": "2a9511ff3bc8762dee5a17f9f3c27431fd739d11"
+                "reference": "1869ff3fcce868bd63706b03f8df04b70f6842ba"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/symfony/ai-platform/zipball/2a9511ff3bc8762dee5a17f9f3c27431fd739d11",
-                "reference": "2a9511ff3bc8762dee5a17f9f3c27431fd739d11",
+                "url": "https://api.github.com/repos/symfony/ai-platform/zipball/1869ff3fcce868bd63706b03f8df04b70f6842ba",
+                "reference": "1869ff3fcce868bd63706b03f8df04b70f6842ba",
                 "shasum": ""
             },
             "require": {
@@ -4537,6 +4537,7 @@
                 "phpstan/phpstan-symfony": "^2.0.6",
                 "phpunit/phpunit": "^11.5",
                 "symfony/ai-agent": "@dev",
+                "symfony/cache": "^7.3|^8.0",
                 "symfony/console": "^7.3|^8.0",
                 "symfony/dotenv": "^7.3|^8.0",
                 "symfony/finder": "^7.3|^8.0",
@@ -4585,6 +4586,7 @@
                 "elevenlabs",
                 "huggingface",
                 "inference",
+                "litellm",
                 "llama",
                 "lmstudio",
                 "meta",
@@ -4619,7 +4621,7 @@
                     "type": "tidelift"
                 }
             ],
-            "time": "2025-11-07T16:01:37+00:00"
+            "time": "2025-11-22T22:42:09+00:00"
         },
         {
             "name": "symfony/ai-store",
@@ -13202,7 +13204,6 @@
         "symfony/ai-agent": 20,
         "symfony/ai-bundle": 20,
         "symfony/ai-chat": 20,
-        "symfony/ai-platform": 20,
         "symfony/ai-store": 20
     },
     "prefer-stable": true,

@@ -21,7 +21,7 @@ class Workflow
     #[ORM\Column(type: 'integer')]
     private ?int $id = null;
 
-    #[ORM\Column(type: 'string', length: 36)]
+    #[ORM\Column(type: 'string', length: 512)]
     private string $sessionId;
 
     #[ORM\Column(type: 'text')]

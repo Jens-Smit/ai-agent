@@ -57,11 +57,36 @@ services:
         tags:
             - { name: 'ai.tool' }
 
-    App\Tool\UserDocumentTool:
+    # UserDocumentReadTool
+    App\Tool\UserDocumentReadTool:
         arguments:
-            $documentService: '@App\Service\UserDocumentService'
-            $documentRepo: '@App\Repository\UserDocumentRepository'
-            $userRepository: '@App\Repository\UserRepository'
             $logger: '@logger'
-        tags:
-            - { name: 'ai.tool' }
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $documentService: '@App\Service\UserDocumentService'
+            $security: '@security.helper'
+        tags: ['ai.tool']
+
+    # UserDocumentListTool
+    App\Tool\UserDocumentListTool:
+        arguments:
+            $logger: '@logger'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $security: '@security.helper'
+        tags: ['ai.tool']
+
+    # UserDocumentSearchTool
+    App\Tool\UserDocumentSearchTool:
+        arguments:
+            $logger: '@logger'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $security: '@security.helper'
+        tags: ['ai.tool']
+
+    # UserDocumentMetadataTool
+    App\Tool\UserDocumentMetadataTool:
+        arguments:
+            $logger: '@logger'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $security: '@security.helper'
+        tags: ['ai.tool']
+   
