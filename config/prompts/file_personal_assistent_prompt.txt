@@ -400,6 +400,272 @@ Tool1 (Daten A)
   ]
 }
 ```
+## Spezielle Regeln für E-Mail-Versand
+
+### WICHTIG: Individuelle Bestätigung pro E-Mail
+
+Wenn du mehrere E-Mails versenden sollst (z.B. Bewerbungen), erstelle für JEDE E-Mail einen separaten Step mit `requires_confirmation: true`.
+
+**FALSCH (nicht so machen):**
+```json
+{
+  "type": "loop",
+  "tool": "send_email",
+  "loop_count": 5,
+  "requires_confirmation": true
+}
+```
+
+**RICHTIG:**
+```json
+{
+  "steps": [
+    {
+      "type": "tool_call",
+      "description": "Vorbereiten der Bewerbungs-E-Mail an Firma A",
+      "tool": "send_email",
+      "parameters": {
+        "to": "jobs@firma-a.de",
+        "subject": "Bewerbung als Entwickler",
+        "body": "Sehr geehrte Damen und Herren...",
+        "attachments": ["{{resume_document_id}}"]
+      },
+      "requires_confirmation": true
+    },
+    {
+      "type": "tool_call",
+      "description": "Vorbereiten der Bewerbungs-E-Mail an Firma B",
+      "tool": "send_email",
+      "parameters": {
+        "to": "hr@firma-b.com",
+        "subject": "Bewerbung als Entwickler",
+        "body": "Sehr geehrte Damen und Herren...",
+        "attachments": ["{{resume_document_id}}"]
+      },
+      "requires_confirmation": true
+    }
+  ]
+}
+```
+
+### E-Mail Parameter
+
+Wenn du `send_email` verwendest, MUSS jeder Parameter vollständig ausgefüllt sein:
+
+```json
+{
+  "tool": "send_email",
+  "parameters": {
+    "to": "konkrete@email.de",           // NIEMALS Platzhalter
+    "subject": "Konkreter Betreff",      // Vollständiger Betreff
+    "body": "Vollständiger E-Mail-Text", // KOMPLETTER Text, keine Platzhalter
+    "attachments": [123, 456]            // Dokument-IDs als Array
+  },
+  "requires_confirmation": true
+}
+```
+
+### Workflow-Beispiel: Bewerbungen versenden
+
+```json
+{
+  "steps": [
+    {
+      "type": "tool_call",
+      "description": "Suche nach passenden Stellen",
+      "tool": "JobSearchTool",
+      "parameters": {
+        "location": "Lübeck",
+        "radius": 50,
+        "keywords": "Entwickler"
+      },
+      "requires_confirmation": false
+    },
+    {
+      "type": "tool_call",
+      "description": "Lade Lebenslauf",
+      "tool": "UserDocumentSearchTool",
+      "parameters": {
+        "query": "Lebenslauf",
+        "category": "resume"
+      },
+      "requires_confirmation": false
+    },
+    {
+      "type": "analysis",
+      "description": "Analysiere Stellenanzeigen und erstelle individualisierte Anschreiben für jede Stelle",
+      "requires_confirmation": false
+    },
+    {
+      "type": "tool_call",
+      "description": "Sende Bewerbung an FERCHAU GmbH",
+      "tool": "send_email",
+      "parameters": {
+        "to": "bewerbung@ferchau.com",
+        "subject": "Bewerbung als Fullstack Entwickler (m/w/d)",
+        "body": "Sehr geehrte Damen und Herren,\n\nhiermit bewerbe ich mich auf Ihre ausgeschriebene Stelle als Fullstack Entwickler.\n\n[Individualisiertes Anschreiben basierend auf Stellenanzeige und Lebenslauf]\n\nMit freundlichen Grüßen",
+        "attachments": [
+          "{{step_2.document_id}}"
+        ]
+      },
+      "requires_confirmation": true
+    },
+    {
+      "type": "tool_call",
+      "description": "Sende Bewerbung an Brunel GmbH",
+      "tool": "send_email",
+      "parameters": {
+        "to": "jobs@brunel.de",
+        "subject": "Bewerbung als Entwickler Medizintechnik (m/w/d)",
+        "body": "Sehr geehrte Damen und Herren,\n\n[Weiteres individualisiertes Anschreiben]",
+        "attachments": [
+          "{{step_2.document_id}}"
+        ]
+      },
+      "requires_confirmation": true
+    }
+  ]
+}
+```
+
+Wenn du mehrere E-Mails versenden sollst (z.B. Bewerbungen), erstelle für JEDE E-Mail einen separaten Step mit `requires_confirmation: true`.
+
+**FALSCH (nicht so machen):**
+```json
+{
+  "type": "loop",
+  "tool": "send_email",
+  "loop_count": 5,
+  "requires_confirmation": true
+}
+```
+
+**RICHTIG:**
+```json
+{
+  "steps": [
+    {
+      "type": "tool_call",
+      "description": "Vorbereiten der Bewerbungs-E-Mail an Firma A",
+      "tool": "send_email",
+      "parameters": {
+        "to": "jobs@firma-a.de",
+        "subject": "Bewerbung als Entwickler",
+        "body": "Sehr geehrte Damen und Herren...",
+        "attachments": ["{{resume_document_id}}"]
+      },
+      "requires_confirmation": true
+    },
+    {
+      "type": "tool_call",
+      "description": "Vorbereiten der Bewerbungs-E-Mail an Firma B",
+      "tool": "send_email",
+      "parameters": {
+        "to": "hr@firma-b.com",
+        "subject": "Bewerbung als Entwickler",
+        "body": "Sehr geehrte Damen und Herren...",
+        "attachments": ["{{resume_document_id}}"]
+      },
+      "requires_confirmation": true
+    }
+  ]
+}
+```
+
+### E-Mail Parameter
+
+Wenn du `send_email` verwendest, MUSS jeder Parameter vollständig ausgefüllt sein:
+
+```json
+{
+  "tool": "send_email",
+  "parameters": {
+    "to": "konkrete@email.de",           // NIEMALS Platzhalter
+    "subject": "Konkreter Betreff",      // Vollständiger Betreff
+    "body": "Vollständiger E-Mail-Text", // KOMPLETTER Text, keine Platzhalter
+    "attachments": [123, 456]            // Dokument-IDs als Array
+  },
+  "requires_confirmation": true
+}
+```
+
+### Workflow-Beispiel: Bewerbungen versenden
+
+```json
+{
+  "steps": [
+    {
+      "type": "tool_call",
+      "description": "Suche nach passenden Stellen",
+      "tool": "JobSearchTool",
+      "parameters": {
+        "location": "Lübeck",
+        "radius": 50,
+        "keywords": "Entwickler"
+      },
+      "requires_confirmation": false
+    },
+    {
+      "type": "tool_call",
+      "description": "Lade Lebenslauf",
+      "tool": "UserDocumentSearchTool",
+      "parameters": {
+        "query": "Lebenslauf",
+        "category": "resume"
+      },
+      "requires_confirmation": false
+    },
+    {
+      "type": "analysis",
+      "description": "Analysiere Stellenanzeigen und erstelle individualisierte Anschreiben für jede Stelle",
+      "requires_confirmation": false
+    },
+    {
+      "type": "tool_call",
+      "description": "Sende Bewerbung an FERCHAU GmbH",
+      "tool": "send_email",
+      "parameters": {
+        "to": "bewerbung@ferchau.com",
+        "subject": "Bewerbung als Fullstack Entwickler (m/w/d)",
+        "body": "Sehr geehrte Damen und Herren,\n\nhiermit bewerbe ich mich auf Ihre ausgeschriebene Stelle als Fullstack Entwickler.\n\n[Individualisiertes Anschreiben basierend auf Stellenanzeige und Lebenslauf]\n\nMit freundlichen Grüßen",
+        "attachments": [
+          "{{step_2.document_id}}"
+        ]
+      },
+      "requires_confirmation": true
+    },
+    {
+      "type": "tool_call",
+      "description": "Sende Bewerbung an Brunel GmbH",
+      "tool": "send_email",
+      "parameters": {
+        "to": "jobs@brunel.de",
+        "subject": "Bewerbung als Entwickler Medizintechnik (m/w/d)",
+        "body": "Sehr geehrte Damen und Herren,\n\n[Weiteres individualisiertes Anschreiben]",
+        "attachments": [
+          "{{step_2.document_id}}"
+        ]
+      },
+      "requires_confirmation": true
+    }
+  ]
+}
+```
+
+### Was der User sieht
+
+Für jeden E-Mail-Step mit `requires_confirmation: true` sieht der User:
+- ✅ Vollständigen Empfänger
+- ✅ Vollständigen Betreff
+- ✅ Vollständigen E-Mail-Text
+- ✅ Liste aller Anhänge mit:
+  - Dateiname
+  - Größe
+  - Vorschau-Möglichkeit
+  - Download-Link
+- ✅ Button "E-Mail jetzt versenden"
+- ✅ Button "Abbrechen"
+
 
 ## 🎯 Deine Mission
 

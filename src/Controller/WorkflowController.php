@@ -5,13 +5,17 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Entity\UserDocument;
+use App\Entity\WorkflowStep;
 use App\Repository\WorkflowRepository;
 use App\Service\AgentStatusService;
 use App\Service\ToolCapabilityChecker;
 use App\Service\WorkflowEngine;
+use Doctrine\ORM\EntityManagerInterface;
 use OpenApi\Attributes as OA;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -26,7 +30,8 @@ class WorkflowController extends AbstractController
         private WorkflowRepository $workflowRepo,
         private ToolCapabilityChecker $capabilityChecker,
         private AgentStatusService $statusService,
-        private LoggerInterface $logger
+        private LoggerInterface $logger,
+        private EntityManagerInterface $em,
     ) {}
 
     /**
@@ -144,19 +149,65 @@ class WorkflowController extends AbstractController
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
-
     /**
-     * Gibt Workflow-Status zurück
+     * Löscht einen Workflow anhand seiner ID
      */
-    #[Route('/status/{sessionId}', name: 'status', methods: ['GET'])]
-    #[OA\Get(
-        summary: 'Holt Workflow-Status',
+    #[Route('/{workflowId}', name: 'delete', methods: ['DELETE'])]
+    #[OA\Delete(
+        summary: 'Löscht einen Workflow',
         parameters: [
-            new OA\Parameter(name: 'sessionId', in: 'path', required: true, schema: new OA\Schema(type: 'string'))
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true, description: 'ID des zu löschenden Workflows', schema: new OA\Schema(type: 'integer'))
         ],
         responses: [
-            new OA\Response(response: 200, description: 'Workflow-Status'),
+            new OA\Response(
+                response: 200, 
+                description: 'Workflow erfolgreich gelöscht', 
+                content: new OA\JsonContent(properties: [
+                    new OA\Property(property: 'status', type: 'string', example: 'deleted'),
+                    new OA\Property(property: 'workflow_id', type: 'integer')
+                ])
+            ),
             new OA\Response(response: 404, description: 'Workflow nicht gefunden')
+        ]
+    )]
+    public function deleteWorkflow(int $workflowId): JsonResponse
+    {
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow) {
+            $this->logger->warning('Attempted to delete non-existent workflow', ['workflowId' => $workflowId]);
+            return $this->json([
+                'error' => 'Workflow not found',
+                'workflow_id' => $workflowId
+            ], Response::HTTP_NOT_FOUND);
+        }
+
+        try {
+            // Löschen des Workflows
+            $this->em->remove($workflow);
+            $this->em->flush();
+
+            $this->logger->info('Workflow successfully deleted', ['workflowId' => $workflowId, 'sessionId' => $workflow->getSessionId()]);
+
+            return $this->json([
+                'status' => 'deleted',
+                'workflow_id' => $workflowId,
+                'message' => sprintf('Workflow mit ID %d erfolgreich gelöscht.', $workflowId)
+            ], Response::HTTP_OK);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to delete workflow', ['workflowId' => $workflowId, 'error' => $e->getMessage()]);
+            return $this->json([
+                'error' => 'Failed to delete workflow',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+    #[Route('/status/{sessionId}', name: 'status', methods: ['GET'])]
+    #[OA\Get(
+        summary: 'Holt Workflow-Status mit E-Mail-Details',
+        parameters: [
+            new OA\Parameter(name: 'sessionId', in: 'path', required: true, schema: new OA\Schema(type: 'string'))
         ]
     )]
     public function getStatus(string $sessionId): JsonResponse
@@ -169,7 +220,7 @@ class WorkflowController extends AbstractController
 
         $steps = [];
         foreach ($workflow->getSteps() as $step) {
-            $steps[] = [
+            $stepData = [
                 'step_number' => $step->getStepNumber(),
                 'type' => $step->getStepType(),
                 'description' => $step->getDescription(),
@@ -178,6 +229,13 @@ class WorkflowController extends AbstractController
                 'result' => $step->getResult(),
                 'error' => $step->getErrorMessage()
             ];
+
+            // Füge E-Mail-Details hinzu, wenn vorhanden
+            if ($step->getEmailDetails()) {
+                $stepData['email_details'] = $step->getEmailDetails();
+            }
+
+            $steps[] = $stepData;
         }
 
         return $this->json([
@@ -190,6 +248,80 @@ class WorkflowController extends AbstractController
             'created_at' => $workflow->getCreatedAt()->format('c'),
             'completed_at' => $workflow->getCompletedAt()?->format('c')
         ]);
+    }
+
+    /**
+     * Holt den vollständigen E-Mail-Body eines Steps
+     */
+    #[Route('/step/{stepId}/email-body', name: 'step_email_body', methods: ['GET'])]
+    #[OA\Get(
+        summary: 'Holt den vollständigen E-Mail-Body eines Steps',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true, schema: new OA\Schema(type: 'integer'))
+        ]
+    )]
+    public function getStepEmailBody(int $stepId): JsonResponse
+    {
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
+        if (!$step) {
+            return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $emailDetails = $step->getEmailDetails();
+        if (!$emailDetails) {
+            return $this->json(['error' => 'No email details available'], Response::HTTP_NOT_FOUND);
+        }
+
+        return $this->json([
+            'step_id' => $stepId,
+            'recipient' => $emailDetails['recipient'],
+            'subject' => $emailDetails['subject'],
+            'body' => $emailDetails['body'],
+            'body_html' => $this->formatEmailBodyAsHtml($emailDetails['body']),
+            'attachments' => $emailDetails['attachments']
+        ]);
+    }
+
+    /**
+     * Holt einen E-Mail-Anhang zur Vorschau
+     */
+    #[Route('/step/{stepId}/attachment/{attachmentId}/preview', name: 'step_attachment_preview', methods: ['GET'])]
+    #[OA\Get(
+        summary: 'Zeigt einen E-Mail-Anhang zur Vorschau',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true),
+            new OA\Parameter(name: 'attachmentId', in: 'path', required: true)
+        ]
+    )]
+    public function previewAttachment(int $stepId, int $attachmentId): Response
+    {
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+        if (!$step) {
+            throw $this->createNotFoundException('Step not found');
+        }
+
+        $document = $this->em->getRepository(UserDocument::class)->find($attachmentId);
+        if (!$document) {
+            throw $this->createNotFoundException('Document not found');
+        }
+
+        // Sicherheitsprüfung: Gehört das Dokument zum User des Workflows?
+        $workflow = $step->getWorkflow();
+        // Hier müsste man den User aus dem Workflow ermitteln (könnte ergänzt werden)
+
+        $filePath = $document->getFullPath();
+        if (!file_exists($filePath)) {
+            throw $this->createNotFoundException('File not found');
+        }
+
+        return new BinaryFileResponse($filePath);
+    }
+
+    private function formatEmailBodyAsHtml(string $body): string
+    {
+        // Konvertiere Plain Text zu HTML für bessere Darstellung
+        return nl2br(htmlspecialchars($body, ENT_QUOTES, 'UTF-8'));
     }
 
     /**

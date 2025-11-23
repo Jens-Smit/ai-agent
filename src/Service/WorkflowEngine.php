@@ -7,6 +7,7 @@ namespace App\Service;
 
 use App\Entity\Workflow;
 use App\Entity\WorkflowStep;
+use App\Repository\UserDocumentRepository;
 use App\Repository\WorkflowRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
@@ -32,8 +33,10 @@ final class WorkflowEngine
         private AgentInterface $agent,
         private EntityManagerInterface $em,
         private WorkflowRepository $workflowRepo,
+        private UserDocumentRepository $documentRepo,
         private AgentStatusService $statusService,
-        private LoggerInterface $logger
+        private LoggerInterface $logger,
+        private string $projectRootDir
     ) {}
 
     /**
@@ -190,8 +193,9 @@ final class WorkflowEngine
         };
     }
 
+
     /**
-     * Führt einen Tool-Call aus
+     * Führt einen Tool-Call aus mit verbesserter Platzhalter-Auflösung
      */
     private function executeToolCall(WorkflowStep $step, array $context, string $sessionId): array
     {
@@ -203,14 +207,20 @@ final class WorkflowEngine
 
         $this->logger->info('Executing tool call', [
             'tool' => $toolName,
-            'parameters' => $parameters
+            'parameters' => $parameters,
+            'context_keys' => array_keys($context)
         ]);
 
-        // Agent führt Tool aus
+        // SPEZIALBEHANDLUNG: SendMailTool
+        if ($toolName === 'send_email' || $toolName === 'SendMailTool') {
+            return $this->prepareSendMailDetails($step, $parameters, $sessionId, $context);
+        }
+
+        // Normale Tool-Ausführung
         $prompt = sprintf(
             'Verwende das Tool "%s" mit folgenden Parametern: %s',
             $toolName,
-            json_encode($parameters)
+            json_encode($parameters, JSON_UNESCAPED_UNICODE)
         );
 
         $messages = new MessageBag(Message::ofUser($prompt));
@@ -220,7 +230,132 @@ final class WorkflowEngine
             'tool' => $toolName,
             'result' => $result->getContent()
         ];
+    }   
+
+    /**
+     * Bereitet E-Mail-Details für Vorschau und Bestätigung vor (VERBESSERT)
+     */
+    private function prepareSendMailDetails(WorkflowStep $step, array $parameters, string $sessionId, array $context): array{
+        $userId = $GLOBALS['current_user_id'] ?? null;
+        if (!$userId) {
+            throw new \RuntimeException('User context not available');
+        }
+
+        // Resolve Platzhalter in allen Parametern
+        $resolvedParams = $this->resolveContextPlaceholders($parameters, $context);
+
+        // Extrahiere E-Mail-Details
+        $recipient = $resolvedParams['to'] ?? 'Unbekannt';
+        $subject = $resolvedParams['subject'] ?? 'Kein Betreff';
+        $body = $resolvedParams['body'] ?? '';
+        $attachmentIds = $resolvedParams['attachments'] ?? [];
+
+        // Normalisiere Attachment-IDs (falls als String oder einzelner Wert)
+        if (!is_array($attachmentIds)) {
+            $attachmentIds = [$attachmentIds];
+        }
+
+        // Lade Anhang-Details
+        $attachmentDetails = [];
+        foreach ($attachmentIds as $docId) {
+            // Handle sowohl numerische IDs als auch string IDs
+            if (empty($docId)) continue;
+            
+            $document = $this->documentRepo->find($docId);
+            if ($document && $document->getUser()->getId() === $userId) {
+                $attachmentDetails[] = [
+                    'id' => $document->getId(),
+                    'filename' => $document->getOriginalFilename(),
+                    'size' => $document->getFileSize(),
+                    'size_human' => $this->formatBytes($document->getFileSize()),
+                    'mime_type' => $document->getMimeType(),
+                    'download_url' => '/api/documents/' . $document->getId() . '/download'
+                ];
+            }
+        }
+
+        // Speichere detaillierte E-Mail-Informationen im Step
+        $emailDetails = [
+            'recipient' => $recipient,
+            'subject' => $subject,
+            'body' => $body,
+            'body_preview' => mb_substr(strip_tags($body), 0, 200) . (mb_strlen($body) > 200 ? '...' : ''),
+            'body_length' => mb_strlen($body),
+            'attachments' => $attachmentDetails,
+            'attachment_count' => count($attachmentDetails),
+            'total_attachment_size' => array_sum(array_column($attachmentDetails, 'size')),
+            'prepared_at' => (new \DateTimeImmutable())->format('c'),
+            'ready_to_send' => true,
+            // Speichere auch die originalen Parameter für späteres Versenden
+            '_original_params' => $resolvedParams
+        ];
+
+        $step->setEmailDetails($emailDetails);
+        $this->em->flush();
+
+        $this->statusService->addStatus(
+            $sessionId,
+            sprintf(
+                '📧 E-Mail vorbereitet an %s - Betreff: "%s" (%d Anhänge, %s)',
+                $recipient,
+                mb_substr($subject, 0, 50),
+                count($attachmentDetails),
+                $this->formatBytes($emailDetails['total_attachment_size'])
+            )
+        );
+
+        return [
+            'tool' => 'send_email',
+            'status' => 'prepared',
+            'email_details' => $emailDetails,
+            'message' => 'E-Mail vorbereitet und wartet auf Bestätigung'
+        ];
     }
+
+
+    /**
+     * Führt das tatsächliche Versenden der E-Mail aus (nach Bestätigung)
+     */
+    private function executeSendEmail(WorkflowStep $step, string $sessionId): array
+    {
+        $emailDetails = $step->getEmailDetails();
+        if (!$emailDetails || !($emailDetails['ready_to_send'] ?? false)) {
+            throw new \RuntimeException('E-Mail nicht zum Versenden bereit');
+        }
+
+        $userId = $GLOBALS['current_user_id'] ?? null;
+        if (!$userId) {
+            throw new \RuntimeException('User context not available');
+        }
+
+        // Rufe SendMailTool direkt auf
+        $prompt = sprintf(
+            'Sende die vorbereitete E-Mail mit folgenden Details: %s',
+            json_encode([
+                'to' => $emailDetails['recipient'],
+                'subject' => $emailDetails['subject'],
+                'body' => $emailDetails['body'],
+                'attachments' => array_column($emailDetails['attachments'], 'id')
+            ])
+        );
+
+        $messages = new MessageBag(Message::ofUser($prompt));
+        $result = $this->agent->call($messages);
+
+        $this->statusService->addStatus(
+            $sessionId,
+            sprintf('✅ E-Mail erfolgreich versendet an %s', $emailDetails['recipient'])
+        );
+
+        return [
+            'tool' => 'send_email',
+            'status' => 'sent',
+            'recipient' => $emailDetails['recipient'],
+            'sent_at' => (new \DateTimeImmutable())->format('c'),
+            'result' => $result->getContent()
+        ];
+    }
+
 
     /**
      * Führt eine Analyse aus
@@ -266,57 +401,96 @@ final class WorkflowEngine
     }
 
     /**
-     * Sendet eine Notification
+     * Führt eine Notification aus (VERBESSERT)
      */
     private function executeNotification(WorkflowStep $step, array $context, string $sessionId): array
     {
         $message = $step->getDescription();
-        $message = $this->resolveContextPlaceholders($message, $context);
-
-        $this->statusService->addStatus($sessionId, '📧 ' . $message);
+        
+        // Resolve Platzhalter im Message-Text
+        $resolvedMessage = $this->resolveContextPlaceholders($message, $context);
+        
+        // Prüfe ob noch Platzhalter übrig sind
+        if (preg_match('/\{\{[^}]+\}\}/', $resolvedMessage)) {
+            $this->logger->warning('Unresolved placeholders in notification', [
+                'message' => $resolvedMessage,
+                'context_keys' => array_keys($context)
+            ]);
+        }
+        
+        $this->statusService->addStatus($sessionId, '📧 ' . $resolvedMessage);
 
         return [
             'notification_sent' => true,
-            'message' => $message
+            'message' => $resolvedMessage
         ];
     }
 
     /**
-     * Ersetzt Context-Platzhalter in Parametern
-     */
-    private function resolveContextPlaceholders(mixed $data, array $context): mixed
-    {
-        if (is_string($data)) {
-            // Ersetze {{step_1.result}} mit tatsächlichem Wert
-            return preg_replace_callback(
-                '/\{\{([^}]+)\}\}/',
-                function($matches) use ($context) {
-                    $path = explode('.', $matches[1]);
-                    $value = $context;
-                    
-                    foreach ($path as $key) {
-                        $value = $value[$key] ?? null;
-                        if ($value === null) break;
+ * Ersetzt Context-Platzhalter in Parametern (VERBESSERT)
+ */
+private function resolveContextPlaceholders(mixed $data, array $context): mixed
+{
+    if (is_string($data)) {
+        // Ersetze {{step_1.result}} mit tatsächlichem Wert
+        return preg_replace_callback(
+            '/\{\{([^}]+)\}\}/',
+            function($matches) use ($context) {
+                $path = $matches[1];
+                
+                // Parse den Pfad: step_1.result.documents[0].identifier
+                $parts = preg_split('/[\.\[\]]+/', $path, -1, PREG_SPLIT_NO_EMPTY);
+                
+                $value = $context;
+                
+                foreach ($parts as $key) {
+                    if (is_array($value)) {
+                        // Numerischer Index
+                        if (is_numeric($key)) {
+                            $value = $value[(int)$key] ?? null;
+                        } else {
+                            $value = $value[$key] ?? null;
+                        }
+                    } elseif (is_object($value)) {
+                        $value = $value->$key ?? null;
+                    } else {
+                        $value = null;
+                        break;
                     }
                     
-                    return $value ?? $matches[0];
-                },
-                $data
-            );
-        }
-
-        if (is_array($data)) {
-            return array_map(
-                fn($item) => $this->resolveContextPlaceholders($item, $context),
-                $data
-            );
-        }
-
-        return $data;
+                    if ($value === null) {
+                        $this->logger->warning('Placeholder not found', [
+                            'placeholder' => $matches[0],
+                            'path' => $path,
+                            'failed_at' => $key
+                        ]);
+                        break;
+                    }
+                }
+                
+                // Wenn Wert ein Array oder Objekt ist, konvertiere zu JSON
+                if (is_array($value) || is_object($value)) {
+                    return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+                }
+                
+                return $value ?? $matches[0]; // Original beibehalten wenn nicht gefunden
+            },
+            $data
+        );
     }
 
+    if (is_array($data)) {
+        return array_map(
+            fn($item) => $this->resolveContextPlaceholders($item, $context),
+            $data
+        );
+    }
+
+    return $data;
+}
+
     /**
-     * Bestätigt einen wartenden Workflow-Step
+     * Bestätigt einen wartenden Workflow-Step (angepasst für E-Mails)
      */
     public function confirmStep(Workflow $workflow, bool $confirmed): void
     {
@@ -338,8 +512,31 @@ final class WorkflowEngine
                 $workflow->getSessionId(),
                 '✅ Schritt bestätigt, fahre fort...'
             );
+
+            // Spezialbehandlung: Wenn es ein vorbereiteter E-Mail-Step ist, sende jetzt
+            if ($currentStep->getToolName() === 'send_email' && $currentStep->getEmailDetails()) {
+                try {
+                    $result = $this->executeSendEmail($currentStep, $workflow->getSessionId());
+                    $currentStep->setResult($result);
+                    $currentStep->setStatus('completed');
+                    $currentStep->setCompletedAt(new \DateTimeImmutable());
+                } catch (\Exception $e) {
+                    $this->logger->error('Failed to send email after confirmation', [
+                        'error' => $e->getMessage()
+                    ]);
+                    $currentStep->setStatus('failed');
+                    $currentStep->setErrorMessage($e->getMessage());
+                    $workflow->setStatus('failed');
+                    $this->em->flush();
+                    return;
+                }
+            } else {
+                $currentStep->setStatus('completed');
+                $currentStep->setCompletedAt(new \DateTimeImmutable());
+            }
             
             $workflow->setStatus('running');
+            $workflow->setCurrentStep(null);
             $this->em->flush();
             
             // Workflow fortsetzen
@@ -354,6 +551,20 @@ final class WorkflowEngine
             $workflow->setStatus('cancelled');
             $this->em->flush();
         }
+    }
+
+    /**
+     * Formatiert Bytes in lesbare Größe
+     */
+    private function formatBytes(int $bytes): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB'];
+        
+        for ($i = 0; $bytes > 1024 && $i < count($units) - 1; $i++) {
+            $bytes /= 1024;
+        }
+        
+        return round($bytes, 2) . ' ' . $units[$i];
     }
 
     /**

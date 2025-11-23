@@ -24,7 +24,7 @@ class PersonalAssistantController extends AbstractController
         private MessageBusInterface $bus
     ) {}
 
-    #[Route('/agent', name: 'agent', methods: ['POST'])]
+    #[Route('/agent/personal', name: 'agent', methods: ['POST'])]
     #[OA\Post(
         summary: 'Personal Assistant AI Agent (Async)',
         description: 'Startet den Personal Assistant asynchron. Nutze /api/agent/status/{sessionId} für Updates.',

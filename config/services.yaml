@@ -8,6 +8,10 @@ parameters:
     google_client_id: '%env(GOOGLE_CLIENT_ID)%'
     google_client_secret: '%env(GOOGLE_CLIENT_SECRET)%'
     google_redirect_uri: '%env(GOOGLE_REDIRECT_URI)%'
+    google_api_key: '%env(GOOGLE_API_KEY)%'
+    google_search_cx: '%env(GOOGLE_SEARCH_CX)%'
+
+  
 
 services:
     # Standardkonfiguration für Services in dieser Datei
@@ -61,10 +65,23 @@ services:
             - '%env(HUGGINGFACE_API_KEY)%'
         ### Services & Tools ###
         ### Services ###
+    # WorkflowEngine Service
+    App\Service\WorkflowEngine:
+        arguments:
+            $agent: '@ai.agent.personal_assistent'
+            $em: '@doctrine.orm.entity_manager'
+            $workflowRepo: '@App\Repository\WorkflowRepository'
+            $documentRepo: '@App\Repository\UserDocumentRepository'
+            $statusService: '@App\Service\AgentStatusService'
+            $logger: '@logger'
+            $projectRootDir: '%kernel.project_dir%'
+        tags:
+            - { name: 'monolog.logger', channel: 'workflow' }
     # AgentStatusService mit EntityManager
     App\Service\AgentStatusService:
         arguments:
             $em: '@doctrine.orm.entity_manager'
+    
     # PasswordService mit konfigurierbarer Frontend-URL
     App\Service\PasswordService:
         arguments:
@@ -303,6 +320,27 @@ services:
         arguments:
             $logger: '@logger'
             $baseOutputPath: '%kernel.project_dir%/var/generated_pdfs' # Or a suitable path for your environment
+        tags: ['ai.tool']
+    # CompanyCareerContactFinderTool
+    App\Tool\CompanyCareerContactFinderTool:
+        arguments:
+            $logger: '@logger'
+            $webScraper: '@App\Tool\WebScraperTool'
+            $searchTool: '@App\Tool\GoogleSearchTool'
+        tags: ['ai.tool']
+    # googleSearchTool
+    App\Tool\GoogleSearchTool:
+        arguments:
+            $httpClient: '@http_client'
+            $logger: '@logger'
+            $apiKey: '%env(GOOGLE_API_KEY)%'
+            $searchEngineCx: '%env(GOOGLE_SEARCH_CX)%'
+        tags: ['ai.tool']
+    App\Tool\InformationExtractorTool:
+        arguments:
+            $webScraper: '@App\Tool\WebScraperTool'
+            $searchTool: '@App\Tool\GoogleSearchTool'
+            $logger: '@logger'
         tags: ['ai.tool']
             
         

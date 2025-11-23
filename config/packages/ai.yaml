@@ -119,7 +119,10 @@ ai:
         - 'App\Tool\UserDocumentListTool'
         - 'App\Tool\UserDocumentSearchTool'
         - 'App\Tool\UserDocumentMetadataTool'
-        #- 'App\Tool\ReceiveMailTool'                   #zum Testen deaktiviert
+        - 'App\Tool\CompanyCareerContactFinderTool'                
+        - 'App\Tool\GoogleSearchTool' 
+        - 'App\Tool\InformationExtractorTool' 
+        #- 'App\Tool\ReceiveMailTool'                   #zum Testen deaktiviert 
         #- 'App\Tool\UserKnowledgeSearchTool'           #zum Testen deaktiviert
         #- 'App\Tool\AddUserKnowledgeTool'              #zum Testen deaktiviert  
                      
@@ -149,10 +152,11 @@ ai:
         - 'App\Tool\GoogleCalendarCreateEventTool'
         - 'App\Tool\JobSearchTool'
         - 'App\Tool\SendMailTool'
+        - 'App\Tool\CompanyCareerContactFinderTool'                
+        - 'App\Tool\GoogleSearchTool'                
         #- 'App\Tool\ReceiveMailTool'                   #zum Testen deaktiviert
         #- 'App\Tool\UserKnowledgeSearchTool'           #zum Testen deaktiviert
         #- 'App\Tool\AddUserKnowledgeTool'              #zum Testen deaktiviert  
-       
         #- 'App\Tool\BatchPdfGenerator'                 #zum Testen deaktiviert
         
 

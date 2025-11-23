@@ -48,6 +48,19 @@ class WorkflowStep
     #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     private ?\DateTimeImmutable $completedAt = null;
 
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $emailDetails = null;
+   
+    public function getEmailDetails(): ?array
+    {
+        return $this->emailDetails;
+    }
+
+    public function setEmailDetails(?array $emailDetails): self
+    {
+        $this->emailDetails = $emailDetails;
+        return $this;
+    }
     public function getId(): ?int
     {
         return $this->id;
