@@ -1,5 +1,4 @@
 <?php
-// src/EventSubscriber/TokenTrackingSubscriber.php
 
 declare(strict_types=1);
 
@@ -8,72 +7,221 @@ namespace App\EventSubscriber;
 use App\Service\TokenTrackingService;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
-use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpClient\DecoratorTrait;
-use Symfony\Component\HttpClient\Response\ResponseStream;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 use Symfony\Contracts\HttpClient\ResponseStreamInterface;
+use Symfony\Contracts\HttpClient\ChunkInterface;
+use Traversable;
 
 /**
  * HTTP Client Decorator der Token-Usage tracked
- * Fängt Requests an AI APIs ab und extrahiert Token-Counts
+ * Fängt Requests an AI APIs ab und extrahiert Token-Counts.
  */
 class TokenTrackingHttpClient implements HttpClientInterface
 {
     use DecoratorTrait;
 
-    private array $aiApiPatterns = [
+    /**
+     * @var array<string, string> Definierte Muster für AI APIs und ihre Provider-Namen
+     */
+    protected array $aiApiPatterns = [ 
         'generativelanguage.googleapis.com' => 'gemini',
         'api.openai.com' => 'openai',
         'api.anthropic.com' => 'anthropic',
     ];
+    
+    /**
+     * @var \WeakMap<ResponseInterface, array> Speichert den Request-Kontext für Responses, die getracked werden müssen.
+     * WeakMap verhindert Memory Leaks.
+     */
+    protected \WeakMap $responseContexts; 
 
+    /**
+     * Der Konstruktor injiziert die benötigten Services.
+     */
     public function __construct(
         private HttpClientInterface $client,
         private TokenTrackingService $tokenService,
         private LoggerInterface $logger,
         private EntityManagerInterface $em
-    ) {}
+    ) {
+        // Initialisiert die WeakMap zur Speicherung des Kontexts
+        $this->responseContexts = new \WeakMap();
+    }
 
     public function request(string $method, string $url, array $options = []): ResponseInterface
     {
         $startTime = microtime(true);
-        
-        // Prüfe ob es ein AI API Call ist
         $aiProvider = $this->detectAiProvider($url);
-        
+
+        // 1. NICHTS ändern, wenn es keine AI-Anfrage ist
         if (!$aiProvider) {
-            // Normaler Request - kein Tracking
             return $this->client->request($method, $url, $options);
         }
 
         try {
+            /** @var ResponseInterface $response */
             $response = $this->client->request($method, $url, $options);
-            $responseTime = (int) ((microtime(true) - $startTime) * 1000);
-
-            // Extrahiere Token-Counts aus Response
-            $this->trackTokensFromResponse($response, $aiProvider, $responseTime, $options);
+            
+            // 2. WICHTIG: KEINEN Response-Methoden-Aufruf hier!
+            // Nur den Kontext speichern. Die eigentliche Logik wird in stream() ausgeführt.
+            $this->responseContexts[$response] = [
+                'provider' => $aiProvider,
+                'startTime' => $startTime,
+                'options' => $options,
+                'status' => 'pending' // Flag zur Steuerung der Abarbeitung in stream()
+            ];
 
             return $response;
 
         } catch (\Throwable $e) {
             $responseTime = (int) ((microtime(true) - $startTime) * 1000);
             
+            // Fehler-Tracking, das keinen Response-Body konsumiert, bleibt hier.
             $this->logger->error('AI API request failed', [
                 'provider' => $aiProvider,
                 'error' => $e->getMessage(),
                 'url' => $url
             ]);
 
-            // Track auch fehlgeschlagene Requests
             $this->trackFailedRequest($aiProvider, $responseTime, $e->getMessage(), $options);
 
             throw $e;
         }
     }
+    
+    /**
+     * Fängt den Response-Stream ab, um Tracking nach Abschluss zu ermöglichen.
+     * HINWEIS: Die Signatur MUSS exakt mit der HttpClientInterface übereinstimmen.
+     */
+    public function stream(ResponseInterface|Traversable|array $responses, ?float $timeout = null): ResponseStreamInterface
+    {
+        // 1. Hole den echten Stream vom dekorierten Client
+        $stream = $this->client->stream($responses, $timeout);
 
-    private function detectAiProvider(string $url): ?string
+        // 2. Gebe eine anonyme Klasse zurück, die ResponseStreamInterface implementiert 
+        // und die Tracking-Logik delegiert
+        return new class(
+            $stream,
+            $this->responseContexts,
+            $this->logger,
+            $this->em,
+            $this // Die Instanz des Dekorators selbst (um auf protected Methoden zuzugreifen)
+        ) implements ResponseStreamInterface {
+            
+            private TokenTrackingHttpClient $tracker; 
+            // FIX: Setze Eigenschaft auf nullable, um "Accessed before initialization" Fehler zu vermeiden.
+            private ?\Traversable $innerIterator = null; 
+            
+            public function __construct(
+                private ResponseStreamInterface $stream, 
+                private \WeakMap $responseContexts, 
+                private LoggerInterface $logger, 
+                private EntityManagerInterface $em,
+                TokenTrackingHttpClient $tracker
+            ) {
+                $this->tracker = $tracker;
+            }
+
+            /**
+             * Gibt den Iterator für die foreach-Schleife zurück, implementiert unsere Tracking-Logik.
+             */
+            public function getIterator(): \Traversable
+            {
+                // Stelle sicher, dass der innere Iterator gesetzt ist (für den Fall, dass rewind nicht zuerst aufgerufen wird)
+                if ($this->innerIterator === null) {
+                    $this->innerIterator = $this->stream;
+                }
+
+                // Iteriere über den inneren Stream (Generator wird hier erstellt und zurückgegeben).
+                foreach ($this->innerIterator as $response => $chunk) {
+                    
+                    // Gib den Chunk weiter
+                    yield $response => $chunk;
+
+                    // Tracking-Logik ausführen, wenn der letzte Chunk empfangen wurde
+                    if ($chunk->isLast() && 
+                        isset($this->responseContexts[$response]) && 
+                        $this->responseContexts[$response]['status'] === 'pending') 
+                    {
+                        
+                        $context = $this->responseContexts[$response];
+                        $responseTime = (int) ((microtime(true) - $context['startTime']) * 1000);
+                        
+                        // Setze Status, um Doppelverarbeitung zu verhindern
+                        $this->responseContexts[$response]['status'] = 'processed';
+
+                        // Delegiere die Tracking-Logik an die HELPER-Methode der Hauptklasse
+                        $this->tracker->trackTokensFromResponse(
+                            $response, 
+                            $context['provider'], 
+                            $responseTime, 
+                            $context['options']
+                        );
+                        
+                        // Der WeakMap-Eintrag kann nun entfernt werden
+                        unset($this->responseContexts[$response]);
+                    }
+                }
+            }
+            
+            // --- Implementierung der fehlenden Iterator-Methoden (Delegation) ---
+            // Wichtig: Rückgabetypen MÜSSEN EXAKT der Schnittstelle entsprechen (kein ?).
+
+            /**
+             * @return \Symfony\Contracts\HttpClient\ChunkInterface
+             */
+            public function current(): ChunkInterface
+            {
+                // FIX: Explizite Prüfung, da Eigenschaft nullable ist.
+                if ($this->innerIterator === null) {
+                     throw new \LogicException('Iterator not initialized before current() call.');
+                }
+                return $this->innerIterator->current();
+            }
+
+            /**
+             * @return \Symfony\Contracts\HttpClient\ResponseInterface
+             */
+            public function key(): ResponseInterface
+            {
+                // FIX: Explizite Prüfung, da Eigenschaft nullable ist.
+                if ($this->innerIterator === null) {
+                     throw new \LogicException('Iterator not initialized before key() call.');
+                }
+                return $this->innerIterator->key();
+            }
+
+            public function next(): void
+            {
+                // Delegiere an den inneren Iterator.
+                if ($this->innerIterator !== null) {
+                     $this->innerIterator->next();
+                }
+            }
+
+            public function rewind(): void
+            {
+                // Stelle sicher, dass der innere Iterator gesetzt ist, wenn rewind() aufgerufen wird.
+                if ($this->innerIterator === null) {
+                    $this->innerIterator = $this->stream;
+                }
+                // Delegiere an den inneren Iterator.
+                $this->innerIterator->rewind();
+            }
+
+            public function valid(): bool
+            {
+                // Delegiere an den inneren Iterator.
+                // Prüfe zuerst auf Null.
+                return $this->innerIterator !== null && $this->innerIterator->valid();
+            }
+            // --- Ende der Iterator-Methoden ---
+        };
+    }
+
+    protected function detectAiProvider(string $url): ?string
     {
         foreach ($this->aiApiPatterns as $pattern => $provider) {
             if (str_contains($url, $pattern)) {
@@ -83,55 +231,64 @@ class TokenTrackingHttpClient implements HttpClientInterface
         return null;
     }
 
-    private function trackTokensFromResponse(
+    // WICHTIG: Sichtbarkeit auf 'protected' geändert, damit die anonyme Klasse darauf zugreifen kann.
+    protected function trackTokensFromResponse(
         ResponseInterface $response,
         string $provider,
         int $responseTime,
         array $requestOptions
     ): void {
         try {
-            $content = $response->getContent(false);
+            if ($response->getStatusCode() >= 400) {
+                 return;
+            }
+
+            // getContent(false) liest den Inhalt einmal in den Cache des Response-Objekts,
+            // was in diesem Kontext (nach isLast() in stream()) sicher ist.
+            $content = $response->getContent(false); 
             $data = json_decode($content, true);
 
             if (!$data) {
+                $this->logger->warning('TOKEN_ Could not decode JSON response for tracking', [
+                    'provider' => $provider,
+                    'content_preview' => mb_substr($content, 0, 100)
+                ]);
                 return;
             }
 
             $tokenData = $this->extractTokenData($data, $provider);
-            
+
             if (!$tokenData) {
+                // Das ist in Ordnung, wenn z.B. nur ein Text-Response ohne Usage-Header kommt.
+                $this->logger->debug('TOKEN_ No token usage data found in response', ['provider' => $provider]);
                 return;
             }
 
-            // Hole User aus Context (muss vorher gesetzt werden)
+            // Sicherstellen, dass der User-Kontext vorhanden ist
             $userId = $GLOBALS['current_user_id'] ?? null;
             if (!$userId) {
-                $this->logger->debug('No user context for token tracking');
+                $this->logger->debug('TOKEN_ No user context for token tracking');
                 return;
             }
 
-            $user = $this->em->find(\App\Entity\User::class, $userId);
+            // Da wir in Symfony/Doctrine sind, muss die Entity-Klasse den korrekten Namespace haben
+            $user = $this->em->find('App\Entity\User', $userId);
             if (!$user) {
+                $this->logger->warning('TOKEN_ User entity not found for tracking', ['userId' => $userId]);
                 return;
             }
 
-            // Extrahiere Session-ID aus Request-Body falls vorhanden
             $sessionId = null;
             if (isset($requestOptions['json']['messages'])) {
-                // Suche nach Session-ID in Message-Context
                 $sessionId = $this->extractSessionIdFromMessages($requestOptions['json']['messages']);
+            } elseif (isset($requestOptions['json']['session'])) {
+                 $sessionId = $requestOptions['json']['session'];
             }
 
-            // Extrahiere Modellname
             $model = $this->extractModelName($data, $provider, $requestOptions);
-
-            // Extrahiere Agent-Type (aus Request oder Context)
             $agentType = $GLOBALS['current_agent_type'] ?? 'unknown';
-
-            // Request-Preview
             $requestPreview = $this->createRequestPreview($requestOptions);
 
-            // Track Token Usage
             $this->tokenService->trackTokenUsage(
                 user: $user,
                 model: $model,
@@ -145,14 +302,14 @@ class TokenTrackingHttpClient implements HttpClientInterface
             );
 
         } catch (\Throwable $e) {
-            $this->logger->error('Failed to track token usage', [
+            $this->logger->error('Failed to track token usage (internal error)', [
                 'error' => $e->getMessage(),
                 'provider' => $provider
             ]);
         }
     }
 
-    private function extractTokenData(array $data, string $provider): ?array
+    protected function extractTokenData(array $data, string $provider): ?array
     {
         return match($provider) {
             'gemini' => $this->extractGeminiTokens($data),
@@ -162,17 +319,8 @@ class TokenTrackingHttpClient implements HttpClientInterface
         };
     }
 
-    private function extractGeminiTokens(array $data): ?array
+    protected function extractGeminiTokens(array $data): ?array
     {
-        // Gemini Response Format:
-        // {
-        //   "usageMetadata": {
-        //     "promptTokenCount": 123,
-        //     "candidatesTokenCount": 456,
-        //     "totalTokenCount": 579
-        //   }
-        // }
-        
         $metadata = $data['usageMetadata'] ?? null;
         if (!$metadata) {
             return null;
@@ -184,17 +332,8 @@ class TokenTrackingHttpClient implements HttpClientInterface
         ];
     }
 
-    private function extractOpenAiTokens(array $data): ?array
+    protected function extractOpenAiTokens(array $data): ?array
     {
-        // OpenAI Response Format:
-        // {
-        //   "usage": {
-        //     "prompt_tokens": 123,
-        //     "completion_tokens": 456,
-        //     "total_tokens": 579
-        //   }
-        // }
-        
         $usage = $data['usage'] ?? null;
         if (!$usage) {
             return null;
@@ -206,16 +345,8 @@ class TokenTrackingHttpClient implements HttpClientInterface
         ];
     }
 
-    private function extractAnthropicTokens(array $data): ?array
+    protected function extractAnthropicTokens(array $data): ?array
     {
-        // Anthropic Response Format:
-        // {
-        //   "usage": {
-        //     "input_tokens": 123,
-        //     "output_tokens": 456
-        //   }
-        // }
-        
         $usage = $data['usage'] ?? null;
         if (!$usage) {
             return null;
@@ -227,34 +358,24 @@ class TokenTrackingHttpClient implements HttpClientInterface
         ];
     }
 
-    private function extractModelName(array $data, string $provider, array $requestOptions): string
+    protected function extractModelName(array $data, string $provider, array $requestOptions): string
     {
-        // Versuche Modellname aus verschiedenen Quellen zu extrahieren
-        
-        // 1. Aus Request-URL
         if (isset($requestOptions['url'])) {
             if (preg_match('/models\/([^:\/]+)/', $requestOptions['url'], $matches)) {
                 return $matches[1];
             }
         }
-
-        // 2. Aus Request-Body
         if (isset($requestOptions['json']['model'])) {
             return $requestOptions['json']['model'];
         }
-
-        // 3. Aus Response
         if (isset($data['model'])) {
             return $data['model'];
         }
-
-        // 4. Fallback auf Provider-Name
         return $provider;
     }
 
-    private function extractSessionIdFromMessages(array $messages): ?string
+    protected function extractSessionIdFromMessages(array $messages): ?string
     {
-        // Durchsuche Messages nach Session-ID
         foreach ($messages as $message) {
             if (isset($message['metadata']['session_id'])) {
                 return $message['metadata']['session_id'];
@@ -263,7 +384,7 @@ class TokenTrackingHttpClient implements HttpClientInterface
         return null;
     }
 
-    private function createRequestPreview(array $options): string
+    protected function createRequestPreview(array $options): string
     {
         if (isset($options['json']['messages'])) {
             $firstMessage = reset($options['json']['messages']);
@@ -283,7 +404,7 @@ class TokenTrackingHttpClient implements HttpClientInterface
         return 'N/A';
     }
 
-    private function trackFailedRequest(
+    protected function trackFailedRequest(
         string $provider,
         int $responseTime,
         string $errorMessage,
@@ -295,7 +416,7 @@ class TokenTrackingHttpClient implements HttpClientInterface
                 return;
             }
 
-            $user = $this->em->find(\App\Entity\User::class, $userId);
+            $user = $this->em->find('App\Entity\User', $userId);
             if (!$user) {
                 return;
             }
@@ -318,7 +439,7 @@ class TokenTrackingHttpClient implements HttpClientInterface
             );
 
         } catch (\Throwable $e) {
-            $this->logger->error('Failed to track failed request', [
+            $this->logger->error('Failed to track failed request (internal error)', [
                 'error' => $e->getMessage()
             ]);
         }

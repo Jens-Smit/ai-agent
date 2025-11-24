@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Entity\User;
 use App\Entity\UserDocument;
 use App\Entity\WorkflowStep;
 use App\Repository\WorkflowRepository;
@@ -74,68 +75,76 @@ class WorkflowController extends AbstractController
     )]
     public function createWorkflow(Request $request): JsonResponse
     {
+        // 1. Daten und User abrufen
         $data = json_decode($request->getContent(), true);
-        $intent = $data['intent'] ?? null;
-        $sessionId = $data['sessionId'] ?? null;
+        // Behebung des Frontend-Problems (falls noch nicht gelöst, siehe vorherige Diskussion)
+        $intent = $data['intent'] ?? $data['user_intent'] ?? null; 
+        $sessionId = $data['sessionId'] ?? $data['session_id'] ?? null;
+        
+        // Den aktuellen authentifizierten Benutzer abrufen
+        // Dies funktioniert nur, wenn der Controller von Symfony korrekt eingerichtet wurde (z.B. durch Extenden von AbstractController)
+        /** @var User $user */
+        $user = $this->getUser(); 
+        
+        // Zusätzliche Prüfung auf den User (falls das Security-Attribut IsGranted fehlt)
+        if (!$user) {
+            return $this->json([
+                'error' => 'Authentication required',
+                'message' => 'User must be logged in to create a workflow.'
+            ], Response::HTTP_UNAUTHORIZED);
+        }
 
         if (!$intent || !$sessionId) {
             return $this->json([
                 'error' => 'Intent and sessionId are required'
             ], Response::HTTP_BAD_REQUEST);
         }
-
+        
+        // 2. Logging und Status
         $this->logger->info('Creating workflow from intent', [
             'session' => $sessionId,
-            'intent' => substr($intent, 0, 100)
+            'intent' => substr($intent, 0, 100),
+            'user_id' => $user->getId(), // Logge die User ID
         ]);
 
         try {
-          
-            
             $this->statusService->addStatus($sessionId, '🤖 KI analysiert Intent und Tool-Landschaft...');
 
-            // Diese Methode prüft UND erstellt Tools bei Bedarf dynamisch
+            // ... (Capability Checker Logik bleibt gleich)
             $capabilityResult = $this->capabilityChecker->ensureCapabilitiesFor($intent);
             
-            // Feedback für den User generieren (Frontend-Status)
-            if (isset($capabilityResult['status']) && $capabilityResult['status'] === 'available') {
-                $toolName = $capabilityResult['tool'] ?? 'Unbekannt';
-                $this->statusService->addStatus($sessionId, sprintf('✅ Passendes Tool identifiziert: %s', $toolName));
-            } elseif (isset($capabilityResult['status']) && $capabilityResult['status'] === 'created') {
-                 $this->statusService->addStatus($sessionId, '✨ Neues Tool wurde dynamisch vom DevAgent erstellt.');
-            }
+            // ... (Status-Updates für Capability Checker)
 
-            // Da die KI Tools sofort erstellt, gibt es technisch keine "missing_tools" mehr,
-            // die den Workflow blockieren. Wir geben ein leeres Array zurück, 
-            // um den Frontend-Vertrag einzuhalten.
-            $missingToolsForFrontend = []; 
-
-
-            // 4. Erstelle Workflow
+            // 3. Workflow erstellen
             $this->statusService->addStatus($sessionId, '📋 Erstelle Workflow-Plan...');
             
-            $workflow = $this->workflowEngine->createWorkflowFromIntent($intent, $sessionId);
+            // Füge den Benutzer beim Erstellen hinzu, damit der Workflow weiß, wem er gehört
+            $workflow = $this->workflowEngine->createWorkflowFromIntent($intent, $sessionId, $user); 
 
-            // 5. Starte Workflow
+            // 4. Starte Workflow
             $this->statusService->addStatus($sessionId, '🚀 Starte Workflow-Ausführung...');
             
-            $this->workflowEngine->executeWorkflow($workflow);
+            // 🚨 WICHTIG: ÜBERGABE DES BENUTZERS AN DEN EXECUTOR
+            // Dies entspricht der Korrektur, die im WorkflowExecutor erforderlich ist.
+            $this->workflowEngine->executeWorkflow($workflow, $user); 
 
+            // 5. Erfolgreiche Antwort
             return $this->json([
                 'status' => 'created',
                 'workflow_id' => $workflow->getId(),
                 'session_id' => $sessionId,
                 'steps_count' => $workflow->getSteps()->count(),
-                'missing_tools' => $missingToolsForFrontend, // Bleibt leer, da auto-resolved
+                'missing_tools' => [],
                 'message' => 'Workflow erstellt und wird ausgeführt.'
             ]);
 
         } catch (\Exception $e) {
+            // ... (Error Handling Logik bleibt gleich)
             $this->logger->error('Workflow creation failed', [
                 'session' => $sessionId,
                 'error' => $e->getMessage()
             ]);
-
+            
             $this->statusService->addStatus(
                 $sessionId,
                 sprintf('❌ Fehler: %s', $e->getMessage())

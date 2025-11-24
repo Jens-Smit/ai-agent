@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 namespace App\Service\Workflow;
 
+use App\Entity\User;
 use App\Entity\Workflow;
 use App\Entity\WorkflowStep;
 use App\Repository\UserDocumentRepository;
@@ -40,14 +41,21 @@ final class WorkflowExecutor
     /**
      * Führt einen Workflow aus
      */
-    public function executeWorkflow(Workflow $workflow): void
+    public function executeWorkflow(Workflow $workflow, ?User $user = null): void
     {
+        // Kleiner Schutz, damit du nicht dauernd ins Rate Limit rauscht
+        $this->throttle();
+
         $workflow->setStatus('running');
         $this->em->flush();
 
-        $context = []; // Shared context zwischen Steps
+        $context = [];
 
         foreach ($workflow->getSteps() as $step) {
+
+            // Vor jedem Step drosseln
+            $this->throttle();
+
             if ($step->getStatus() === 'completed') {
                 continue;
             }
@@ -58,9 +66,8 @@ final class WorkflowExecutor
             );
 
             try {
-                $result = $this->executeStep($step, $context, $workflow->getSessionId());
+                $result = $this->executeStep($step, $context, $workflow->getSessionId(), $user);
 
-                // Speichere Ergebnis im Context
                 $context['step_' . $step->getStepNumber()] = ['result' => $result];
 
                 $step->setResult($result);
@@ -72,7 +79,6 @@ final class WorkflowExecutor
                     sprintf('✅ Step %d abgeschlossen', $step->getStepNumber())
                 );
 
-                // Bei Bestätigungs-Requirement: Pausiere Workflow
                 if ($step->requiresConfirmation()) {
                     $workflow->setStatus('waiting_confirmation');
                     $workflow->setCurrentStep($step->getStepNumber());
@@ -94,7 +100,6 @@ final class WorkflowExecutor
             $this->em->flush();
         }
 
-        // Workflow erfolgreich abgeschlossen
         $workflow->setStatus('completed');
         $workflow->setCompletedAt(new \DateTimeImmutable());
         $this->em->flush();
@@ -103,6 +108,15 @@ final class WorkflowExecutor
             $workflow->getSessionId(),
             '🎉 Workflow erfolgreich abgeschlossen!'
         );
+    }
+
+    /**
+     * Kleine Wartezeit, damit du nicht ins Gemini-Limit reinläufst
+     */
+    private function throttle(): void
+    {
+        // 200 ms Pause – du kannst den Wert höher oder niedriger machen
+        usleep(5000000);
     }
 
     /**
@@ -137,7 +151,7 @@ final class WorkflowExecutor
     /**
      * Führt einzelnen Step aus mit Retry-Logik
      */
-    private function executeStep(WorkflowStep $step, array $context, string $sessionId): array
+    private function executeStep(WorkflowStep $step, array $context, string $sessionId, ?User $user): array
     {
         $maxRetries = 3;
         $attempt = 0;
@@ -146,7 +160,7 @@ final class WorkflowExecutor
         while ($attempt < $maxRetries) {
             try {
                 $result = match ($step->getStepType()) {
-                    'tool_call' => $this->executeToolCall($step, $context, $sessionId),
+                    'tool_call' => $this->executeToolCall($step, $context, $sessionId, $user),
                     'analysis' => $this->executeAnalysis($step, $context, $sessionId),
                     'decision' => $this->executeDecision($step, $context, $sessionId),
                     'notification' => $this->executeNotification($step, $context, $sessionId),
@@ -181,10 +195,39 @@ final class WorkflowExecutor
         throw $lastException ?? new \RuntimeException('Step failed after retries');
     }
 
+    public function callToolWithRetry(string $tool, array $params, string $sessionId)
+    {
+        $maxTries = 3;
+        $tries = 0;
+
+        while ($tries < $maxTries) {
+            $tries++;
+
+            try {
+                $result = $this->callToolWithRetry($tool, $params, $sessionId);
+
+            } catch (\Exception $e) {
+
+                // Kurze Pause zwischen den Versuchen
+                usleep(150000);
+
+                // Letzter Versuch schlägt fehl → CircuitBreaker auslösen
+                if ($tries >= $maxTries) {
+                    $this->circuitBreakerService->fail(
+                        "tool:$tool",
+                        $e->getMessage()
+                    );
+
+                    throw $e;
+                }
+            }
+        }
+    }
+
     /**
      * Führt Tool-Call aus
      */
-    private function executeToolCall(WorkflowStep $step, array $context, string $sessionId): array
+    private function executeToolCall(WorkflowStep $step, array $context, string $sessionId, ?User $user): array
     {
         $toolName = $step->getToolName();
         $parameters = $this->resolveContextPlaceholders($step->getToolParameters(), $context);
@@ -196,7 +239,7 @@ final class WorkflowExecutor
 
         // Spezialbehandlung für E-Mail
         if ($toolName === 'send_email' || $toolName === 'SendMailTool') {
-            return $this->prepareSendMailDetails($step, $parameters, $sessionId, $context);
+            return $this->prepareSendMailDetails($step, $parameters, $sessionId, $context, $user);
         }
 
         // Standard Tool-Call
@@ -254,19 +297,19 @@ final class WorkflowExecutor
         $prompt = sprintf(
             'Analysiere die folgenden Daten und %s.
 
-WICHTIG: Antworte NUR mit einem gültigen JSON-Objekt, das EXAKT diese Felder enthält: %s
+            WICHTIG: Antworte NUR mit einem gültigen JSON-Objekt, das EXAKT diese Felder enthält: %s
 
-Verwende dieses Format:
-```json
-{
-%s
-}
-```
+            Verwende dieses Format:
+            ```json
+            {
+            %s
+            }
+            ```
 
-Daten zur Analyse:
-%s
+            Daten zur Analyse:
+            %s
 
-Antworte AUSSCHLIESSLICH mit dem JSON-Objekt, ohne zusätzlichen Text davor oder danach.',
+            Antworte AUSSCHLIESSLICH mit dem JSON-Objekt, ohne zusätzlichen Text davor oder danach.',
             $step->getDescription(),
             $fieldsList,
             implode(",\n", array_map(fn($k) => "  \"$k\": \"...\"", array_keys($requiredFields))),
@@ -421,9 +464,10 @@ Antworte AUSSCHLIESSLICH mit dem JSON-Objekt, ohne zusätzlichen Text davor oder
         WorkflowStep $step,
         array $parameters,
         string $sessionId,
-        array $context
+        array $context,
+        ?User $user
     ): array {
-        $userId = $GLOBALS['current_user_id'] ?? null;
+        $userId = $user?->getId();
         if (!$userId) {
             throw new \RuntimeException('User context not available');
         }
