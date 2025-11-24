@@ -17,10 +17,8 @@ use Symfony\AI\Platform\Message\Message;
 use Symfony\AI\Platform\Message\MessageBag;
 use Symfony\AI\Platform\PlatformInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use App\Tool\CompanyCareerContactFinderTool;
 
-/**
- * Workflow-Executor: Führt Workflows mit Retry-Logik und strukturierter Daten-Extraktion aus
- */
 final class WorkflowExecutor
 {
     private int $agentFailureCount = 0;
@@ -35,25 +33,19 @@ final class WorkflowExecutor
         private EntityManagerInterface $em,
         private UserDocumentRepository $documentRepo,
         private AgentStatusService $statusService,
-        private LoggerInterface $logger
+        private LoggerInterface $logger,
+        private CompanyCareerContactFinderTool $contactFinderTool,
     ) {}
 
-    /**
-     * Führt einen Workflow aus
-     */
     public function executeWorkflow(Workflow $workflow, ?User $user = null): void
     {
-        // Kleiner Schutz, damit du nicht dauernd ins Rate Limit rauscht
         $this->throttle();
-
         $workflow->setStatus('running');
         $this->em->flush();
 
         $context = [];
 
         foreach ($workflow->getSteps() as $step) {
-
-            // Vor jedem Step drosseln
             $this->throttle();
 
             if ($step->getStatus() === 'completed') {
@@ -68,6 +60,7 @@ final class WorkflowExecutor
             try {
                 $result = $this->executeStep($step, $context, $workflow->getSessionId(), $user);
 
+                // 🔧 FIX: Speichere Ergebnis strukturiert im Context
                 $context['step_' . $step->getStepNumber()] = ['result' => $result];
 
                 $step->setResult($result);
@@ -110,21 +103,13 @@ final class WorkflowExecutor
         );
     }
 
-    /**
-     * Kleine Wartezeit, damit du nicht ins Gemini-Limit reinläufst
-     */
     private function throttle(): void
     {
-        // 200 ms Pause – du kannst den Wert höher oder niedriger machen
-        usleep(5000000);
+        usleep(500000); // 500ms Pause (erhöht von 200ms)
     }
 
-    /**
-     * Bestätigt Step und führt Workflow fort
-     */
     public function confirmAndContinue(Workflow $workflow, WorkflowStep $step): void
     {
-        // Für E-Mail: Führe tatsächliches Versenden aus
         if ($step->getToolName() === 'send_email' && $step->getEmailDetails()) {
             try {
                 $result = $this->executeSendEmail($step, $workflow->getSessionId());
@@ -144,13 +129,9 @@ final class WorkflowExecutor
         $workflow->setCurrentStep(null);
         $this->em->flush();
 
-        // Führe verbleibende Steps aus
         $this->executeWorkflow($workflow);
     }
 
-    /**
-     * Führt einzelnen Step aus mit Retry-Logik
-     */
     private function executeStep(WorkflowStep $step, array $context, string $sessionId, ?User $user): array
     {
         $maxRetries = 3;
@@ -183,50 +164,20 @@ final class WorkflowExecutor
                     'error' => $e->getMessage()
                 ]);
 
+                $backoff = min(pow(2, $attempt - 1) * 5, 30);
                 $this->statusService->addStatus(
                     $sessionId,
-                    sprintf('⚠️ Retry %d/%d: %s', $attempt, $maxRetries, substr($e->getMessage(), 0, 80))
+                    sprintf('⚠️ Retry %d/%d (warte %ds): %s', $attempt, $maxRetries, $backoff, substr($e->getMessage(), 0, 80))
                 );
 
-                sleep(min(pow(2, $attempt - 1) * 5, 30)); // Exponential backoff
+                sleep($backoff);
             }
         }
 
         throw $lastException ?? new \RuntimeException('Step failed after retries');
     }
 
-    public function callToolWithRetry(string $tool, array $params, string $sessionId)
-    {
-        $maxTries = 3;
-        $tries = 0;
-
-        while ($tries < $maxTries) {
-            $tries++;
-
-            try {
-                $result = $this->callToolWithRetry($tool, $params, $sessionId);
-
-            } catch (\Exception $e) {
-
-                // Kurze Pause zwischen den Versuchen
-                usleep(150000);
-
-                // Letzter Versuch schlägt fehl → CircuitBreaker auslösen
-                if ($tries >= $maxTries) {
-                    $this->circuitBreakerService->fail(
-                        "tool:$tool",
-                        $e->getMessage()
-                    );
-
-                    throw $e;
-                }
-            }
-        }
-    }
-
-    /**
-     * Führt Tool-Call aus
-     */
+    
     private function executeToolCall(WorkflowStep $step, array $context, string $sessionId, ?User $user): array
     {
         $toolName = $step->getToolName();
@@ -234,15 +185,35 @@ final class WorkflowExecutor
 
         $this->logger->info('Executing tool call', [
             'tool' => $toolName,
-            'parameters' => $parameters
+            'parameters' => $parameters,
+            'context_keys' => array_keys($context)
         ]);
 
-        // Spezialbehandlung für E-Mail
+        // 🔧 FIX: Prüfe ob Platzhalter aufgelöst wurden
+        $unresolvedPlaceholders = $this->findUnresolvedPlaceholders($parameters);
+        if (!empty($unresolvedPlaceholders)) {
+            $this->logger->error('Unresolved placeholders detected', [
+                'placeholders' => $unresolvedPlaceholders,
+                'available_context' => array_keys($context)
+            ]);
+
+            throw new \RuntimeException(
+                sprintf('Unresolved placeholders: %s. Context verfügbar: %s',
+                    implode(', ', $unresolvedPlaceholders),
+                    implode(', ', array_keys($context))
+                )
+            );
+        }
+        
+        // NEUE LOGIK: Spezielles Tool-Handling für company_career_contact_finder
+        if ($toolName === 'company_career_contact_finder') {
+            return $this->executeCompanyContactFinderWithFallback($step, $parameters, $context, $sessionId);
+        }
+
         if ($toolName === 'send_email' || $toolName === 'SendMailTool') {
             return $this->prepareSendMailDetails($step, $parameters, $sessionId, $context, $user);
         }
 
-        // Standard Tool-Call
         $prompt = sprintf(
             'Verwende das Tool "%s" mit folgenden Parametern: %s',
             $toolName,
@@ -257,24 +228,223 @@ final class WorkflowExecutor
             'result' => $result->getContent()
         ];
     }
+    
+    /**
+     * Führt das CompanyCareerContactFinderTool aus und versucht bei Misserfolg,
+     * die nächste Job-URL aus Schritt 1 zu verwenden.
+     * @throws \RuntimeException Wenn alle Fallbacks fehlschlagen oder keine Daten verfügbar sind.
+     */
+   
+   
+     private function executeCompanyContactFinderWithFallback(
+        WorkflowStep $step,
+        array $parameters,
+        array $context,
+        string $sessionId
+    ): array {
+        $jobResults = $context['step_1']['result']['job_search_results'] ?? [];
+        $initialCompanyName = $parameters['company_name'] ?? null;
+
+        $urlsToTry = [];
+
+        if ($initialCompanyName) {
+            $urlsToTry[] = [
+                'type' => 'company_name',
+                'value' => $initialCompanyName,
+                'description' => sprintf('Initialer Firmenname: %s', $initialCompanyName)
+            ];
+        }
+
+        foreach ($jobResults as $index => $result) {
+            if (!empty($result['url'])) {
+                $urlsToTry[] = [
+                    'type' => 'job_url',
+                    'value' => $result['url'],
+                    'description' => sprintf('Job-URL #%d: %s', $index + 1, $result['url']),
+                    'company' => $result['company'] ?? null
+                ];
+            }
+        }
+
+        $foundResult = null;
+        $attempt = 0;
+
+        foreach ($urlsToTry as $item) {
+            $attempt++;
+            $this->statusService->addStatus(
+                $sessionId,
+                sprintf('🔄 Starte Kontakt-Suche (Versuch %d): %s', $attempt, $item['description'])
+            );
+
+            $searchParam = $item['value'];
+            
+            if ($item['type'] === 'job_url') {
+                $searchParam = $item['company'] ?? $initialCompanyName;
+                
+                if (empty($searchParam)) {
+                    $this->logger->warning(sprintf('Kein Firmenname für Fallback-Job-URL gefunden. Überspringe Versuch %d.', $attempt));
+                    continue;
+                }
+                
+                $this->statusService->addStatus(
+                    $sessionId,
+                    sprintf('ℹ️ Suche nach Kontakt für Firma: %s', $searchParam)
+                );
+            }
+
+            try {
+                // ✅ DIREKTER Tool-Aufruf via Dependency Injection
+                $this->logger->info('Rufe CompanyCareerContactFinderTool direkt auf', [
+                    'company_name' => $searchParam,
+                    'attempt' => $attempt
+                ]);
+                
+                // Rufe die __invoke() Methode des Tools direkt auf
+                $toolResult = ($this->contactFinderTool)($searchParam);
+                
+                $this->logger->info('Tool-Aufruf abgeschlossen', [
+                    'attempt' => $attempt,
+                    'success' => $toolResult['success'] ?? false,
+                    'has_general_email' => !empty($toolResult['general_email']),
+                    'has_application_email' => !empty($toolResult['application_email']),
+                    'contact_person' => $toolResult['contact_person'] ?? null
+                ]);
+                
+                if ($this->isContactFinderSuccessful($toolResult)) {
+                    $foundResult = [
+                        'tool' => $step->getToolName(),
+                        'result' => $toolResult
+                    ];
+                    
+                    $emailInfo = [];
+                    if (!empty($toolResult['application_email'])) {
+                        $emailInfo[] = 'Bewerbungs-E-Mail: ' . $toolResult['application_email'];
+                    }
+                    if (!empty($toolResult['general_email'])) {
+                        $emailInfo[] = 'Allgemeine E-Mail: ' . $toolResult['general_email'];
+                    }
+                    
+                    $this->statusService->addStatus(
+                        $sessionId, 
+                        '✅ Kontaktdaten gefunden: ' . implode(', ', $emailInfo)
+                    );
+                    break;
+                }
+                
+                $this->statusService->addStatus($sessionId, '⚠️ Keine relevanten Kontaktdaten gefunden. Versuche nächsten Fallback.');
+
+            } catch (\Throwable $e) {
+                $this->logger->warning('Tool-Ausführung fehlgeschlagen', [
+                    'attempt' => $attempt,
+                    'company_name' => $searchParam,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                continue;
+            }
+        }
+
+        if ($foundResult) {
+            return $foundResult;
+        }
+
+        throw new \RuntimeException(sprintf(
+            'Kontaktdaten konnten nach %d Versuchen nicht gefunden werden. Der Workflow kann nicht fortgesetzt werden.',
+            $attempt
+        ));
+    }
 
     /**
-     * Führt Analysis aus mit strukturierter JSON-Extraktion
+     * Prüft, ob das Ergebnis des ContactFinders erfolgreich ist.
      */
+    private function isContactFinderSuccessful(array $result): bool
+    {
+        // Prüfe success Flag vom Tool
+        if (isset($result['success']) && $result['success'] === true) {
+            return true;
+        }
+
+        // Fallback: Mindestens eine relevante E-Mail gefunden
+        return !empty($result['application_email']) || !empty($result['general_email']);
+    }
+    
+
+    /**
+     * Ruft das CompanyCareerContactFinderTool direkt auf (ohne Agent-Wrapper)
+     */
+    private function invokeContactFinderDirectly(string $companyName): array
+    {
+        // Hole das Tool direkt aus der Toolbox
+        $toolbox = $this->agent->getToolbox();
+        
+        if (!$toolbox) {
+            throw new \RuntimeException('Agent hat keine Toolbox konfiguriert');
+        }
+        
+        // Suche das CompanyCareerContactFinderTool
+        $contactFinderTool = null;
+        foreach ($toolbox->all() as $tool) {
+            if ($tool->getName() === 'company_career_contact_finder') {
+                $contactFinderTool = $tool;
+                break;
+            }
+        }
+        
+        if (!$contactFinderTool) {
+            throw new \RuntimeException('CompanyCareerContactFinderTool nicht in Toolbox gefunden');
+        }
+        
+        // Rufe das Tool direkt auf
+        $this->logger->info('Rufe Tool direkt auf', [
+            'tool' => 'company_career_contact_finder',
+            'company_name' => $companyName
+        ]);
+        
+        $result = $contactFinderTool($companyName);
+        
+        // Das Tool gibt bereits ein Array zurück
+        if (!is_array($result)) {
+            throw new \RuntimeException('Tool gab kein Array zurück: ' . gettype($result));
+        }
+        
+        return $result;
+    }
+
+    
+    
+    
+
+    // 🔧 FIX: Neue Methode zum Finden unaufgelöster Platzhalter
+    private function findUnresolvedPlaceholders(mixed $data): array
+    {
+        $unresolved = [];
+
+        if (is_string($data)) {
+            if (preg_match_all('/\{\{([^}]+)\}\}/', $data, $matches)) {
+                $unresolved = array_merge($unresolved, $matches[0]);
+            }
+        } elseif (is_array($data)) {
+            foreach ($data as $value) {
+                $unresolved = array_merge($unresolved, $this->findUnresolvedPlaceholders($value));
+            }
+        }
+
+        return array_unique($unresolved);
+    }
+
     private function executeAnalysis(WorkflowStep $step, array $context, string $sessionId): array
     {
         $expectedFormat = $step->getExpectedOutputFormat();
 
         if ($expectedFormat && isset($expectedFormat['fields'])) {
-            // Strukturierte Analyse mit vorgegebenem Format
             return $this->executeStructuredAnalysis($step, $context, $sessionId, $expectedFormat['fields']);
         }
 
-        // Fallback: Unstrukturierte Analyse
+        // 🔧 FIX: Auch unstrukturierte Analysis sollte versuchen, Felder zu extrahieren
         $prompt = sprintf(
             'Analysiere folgende Daten und %s: %s',
             $step->getDescription(),
-            json_encode($context, JSON_UNESCAPED_UNICODE)
+            json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)
         );
 
         $messages = new MessageBag(Message::ofUser($prompt));
@@ -283,9 +453,6 @@ final class WorkflowExecutor
         return ['analysis' => $result->getContent()];
     }
 
-    /**
-     * Führt strukturierte Analyse mit erzwungenem JSON-Output aus
-     */
     private function executeStructuredAnalysis(
         WorkflowStep $step,
         array $context,
@@ -294,45 +461,53 @@ final class WorkflowExecutor
     ): array {
         $fieldsList = implode(', ', array_keys($requiredFields));
 
+        // 🔧 FIX: Verbesserte Prompt mit klareren Anweisungen
         $prompt = sprintf(
             'Analysiere die folgenden Daten und %s.
 
-            WICHTIG: Antworte NUR mit einem gültigen JSON-Objekt, das EXAKT diese Felder enthält: %s
+KRITISCH WICHTIG: 
+1. Antworte NUR mit einem gültigen JSON-Objekt
+2. Das JSON MUSS EXAKT diese Felder enthalten: %s
+3. Kein Text vor oder nach dem JSON
+4. Keine Markdown-Formatierung außer ```json Block
 
-            Verwende dieses Format:
-            ```json
-            {
-            %s
-            }
-            ```
+Format:
+```json
+{
+%s
+}
+```
 
-            Daten zur Analyse:
-            %s
-
-            Antworte AUSSCHLIESSLICH mit dem JSON-Objekt, ohne zusätzlichen Text davor oder danach.',
+Daten zur Analyse:
+%s',
             $step->getDescription(),
             $fieldsList,
-            implode(",\n", array_map(fn($k) => "  \"$k\": \"...\"", array_keys($requiredFields))),
+            implode(",\n", array_map(fn($k) => "  \"$k\": \"<wert für $k>\"", array_keys($requiredFields))),
             json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)
         );
 
         $messages = new MessageBag(Message::ofUser($prompt));
         $result = $this->callAgentWithFallback($messages, $sessionId);
 
-        // Extrahiere JSON aus Antwort
-        $structuredData = $this->extractStructuredJson($result->getContent(), array_keys($requiredFields));
+        $content = $result->getContent();
+        
+        // 🔧 FIX: Protokolliere die Antwort für Debugging
+        $this->logger->info('Structured analysis response', [
+            'step' => $step->getStepNumber(),
+            'content_preview' => substr($content, 0, 500)
+        ]);
+
+        $structuredData = $this->extractStructuredJson($content, array_keys($requiredFields));
 
         $this->logger->info('Structured analysis completed', [
             'step' => $step->getStepNumber(),
-            'extracted_fields' => array_keys($structuredData)
+            'extracted_fields' => array_keys($structuredData),
+            'field_values' => $structuredData
         ]);
 
         return $structuredData;
     }
 
-    /**
-     * Extrahiert strukturiertes JSON aus Agent-Antwort
-     */
     private function extractStructuredJson(string $content, array $requiredFields): array
     {
         // Strategie 1: JSON in Code-Block
@@ -353,27 +528,28 @@ final class WorkflowExecutor
 
         if (json_last_error() !== JSON_ERROR_NONE) {
             $this->logger->warning('JSON decode failed, falling back to key-value extraction', [
-                'error' => json_last_error_msg()
+                'error' => json_last_error_msg(),
+                'json_preview' => substr($json, 0, 200)
             ]);
             return $this->extractKeyValuePairs($content, $requiredFields);
         }
 
         // Validiere dass alle erforderlichen Felder vorhanden sind
         foreach ($requiredFields as $field) {
-            if (!isset($data[$field])) {
-                $this->logger->warning('Missing required field, attempting extraction', [
+            if (!isset($data[$field]) || empty($data[$field])) {
+                $this->logger->warning('Missing or empty required field, attempting extraction', [
                     'field' => $field
                 ]);
-                $data[$field] = $this->extractFieldFromText($content, $field);
+                $extracted = $this->extractFieldFromText($content, $field);
+                if ($extracted) {
+                    $data[$field] = $extracted;
+                }
             }
         }
 
         return $data;
     }
 
-    /**
-     * Extrahiert Key-Value-Paare aus Text als Fallback
-     */
     private function extractKeyValuePairs(string $content, array $requiredFields): array
     {
         $result = [];
@@ -386,42 +562,31 @@ final class WorkflowExecutor
         return $result;
     }
 
-    /**
-     * Extrahiert einzelnes Feld aus Text mittels Pattern-Matching
-     */
     private function extractFieldFromText(string $content, string $fieldName): ?string
     {
-        // Pattern 1: "field_name": "value" oder "field_name": value
+        // Pattern 1: "field_name": "value"
         if (preg_match('/"' . preg_quote($fieldName) . '"\s*:\s*"([^"]+)"/', $content, $matches)) {
             return $matches[1];
         }
-        if (preg_match('/"' . preg_quote($fieldName) . '"\s*:\s*([^,}\s]+)/', $content, $matches)) {
+
+        // Pattern 2: **Firmenname:** plusYou GmbH
+        if (preg_match('/\*\*' . preg_quote(str_replace('_', ' ', $fieldName)) . '[:\*]*\s*([^\n]+)/i', $content, $matches)) {
             return trim($matches[1]);
         }
 
-        // Pattern 2: field_name: value oder field_name = value
-        if (preg_match('/' . preg_quote($fieldName) . '\s*[:=]\s*"([^"]+)"/', $content, $matches)) {
-            return $matches[1];
-        }
-        if (preg_match('/' . preg_quote($fieldName) . '\s*[:=]\s*([^\n,]+)/', $content, $matches)) {
+        // Pattern 3: Firmenname: plusYou GmbH
+        if (preg_match('/' . preg_quote(str_replace('_', ' ', $fieldName)) . '\s*:\s*([^\n]+)/i', $content, $matches)) {
             return trim($matches[1]);
         }
 
-        // Pattern 3: Natürlichsprachlich (z.B. "Der Firmenname ist X")
-        $fieldLabel = str_replace('_', ' ', $fieldName);
-        if (preg_match('/(?:der|die|das)?\s*' . preg_quote($fieldLabel) . '\s+(?:ist|lautet)\s+"([^"]+)"/', $content, $matches)) {
-            return $matches[1];
-        }
-        if (preg_match('/(?:der|die|das)?\s*' . preg_quote($fieldLabel) . '\s+(?:ist|lautet)\s+([^\n.]+)/', $content, $matches)) {
+        // Pattern 4: - Arbeitgeber: plusYou GmbH
+        if (preg_match('/-\s*' . preg_quote(str_replace('_', ' ', $fieldName)) . '\s*:\s*([^\n]+)/i', $content, $matches)) {
             return trim($matches[1]);
         }
 
         return null;
     }
 
-    /**
-     * Führt Decision aus
-     */
     private function executeDecision(WorkflowStep $step, array $context, string $sessionId): array
     {
         $expectedFormat = $step->getExpectedOutputFormat();
@@ -442,9 +607,6 @@ final class WorkflowExecutor
         return ['decision' => $result->getContent()];
     }
 
-    /**
-     * Führt Notification aus
-     */
     private function executeNotification(WorkflowStep $step, array $context, string $sessionId): array
     {
         $message = $this->resolveContextPlaceholders($step->getDescription(), $context);
@@ -457,9 +619,6 @@ final class WorkflowExecutor
         ];
     }
 
-    /**
-     * Bereitet E-Mail vor
-     */
     private function prepareSendMailDetails(
         WorkflowStep $step,
         array $parameters,
@@ -523,9 +682,6 @@ final class WorkflowExecutor
         ];
     }
 
-    /**
-     * Versendet E-Mail nach Bestätigung
-     */
     private function executeSendEmail(WorkflowStep $step, string $sessionId): array
     {
         $emailDetails = $step->getEmailDetails();
@@ -556,33 +712,41 @@ final class WorkflowExecutor
         ];
     }
 
-    /**
-     * Löst Context-Platzhalter auf
-     */
+    // 🔧 FIX: Verbesserte Platzhalter-Auflösung mit Debugging
     private function resolveContextPlaceholders(mixed $data, array $context): mixed
     {
         if (is_string($data)) {
             return preg_replace_callback(
                 '/\{\{([^}]+)\}\}/',
                 function ($matches) use ($context) {
-                    $path = $matches[1];
+                    $path = trim($matches[1]);
                     $parts = preg_split('/[\.\[\]]+/', $path, -1, PREG_SPLIT_NO_EMPTY);
+
+                    $this->logger->debug('Resolving placeholder', [
+                        'placeholder' => $matches[0],
+                        'path' => $path,
+                        'parts' => $parts,
+                        'context_keys' => array_keys($context)
+                    ]);
 
                     $value = $context;
                     foreach ($parts as $key) {
-                        if (is_array($value)) {
-                            $value = $value[$key] ?? null;
+                        if (is_array($value) && isset($value[$key])) {
+                            $value = $value[$key];
                         } else {
-                            return $matches[0]; // Behalte Platzhalter wenn nicht auflösbar
-                        }
-
-                        if ($value === null) {
-                            $this->logger->debug('Placeholder not resolved', [
+                            $this->logger->warning('Placeholder path not found', [
                                 'placeholder' => $matches[0],
-                                'path' => $path
+                                'path' => $path,
+                                'missing_key' => $key,
+                                'current_value_type' => gettype($value),
+                                'available_keys' => is_array($value) ? array_keys($value) : 'not_an_array'
                             ]);
-                            return $matches[0];
+                            return $matches[0]; // Behalte Platzhalter
                         }
+                    }
+
+                    if ($value === null) {
+                        return $matches[0];
                     }
 
                     return is_scalar($value) ? (string)$value : json_encode($value);
@@ -598,9 +762,6 @@ final class WorkflowExecutor
         return $data;
     }
 
-    /**
-     * Agent-Call mit Fallback auf Flash Lite
-     */
     private function callAgentWithFallback(MessageBag $messages, string $sessionId): mixed
     {
         try {
@@ -627,9 +788,15 @@ final class WorkflowExecutor
         } catch (\Throwable $e) {
             $this->agentFailureCount++;
 
+            $this->logger->warning('Agent call failed', [
+                'failure_count' => $this->agentFailureCount,
+                'error' => $e->getMessage()
+            ]);
+
             if ($this->agentFailureCount >= 3 && !$this->useFlashLite) {
                 $this->useFlashLite = true;
                 $this->statusService->addStatus($sessionId, '⚠️ Wechsle zu Flash Lite');
+                sleep(2); // Kurze Pause vor Fallback
                 return $this->callAgentWithFallback($messages, $sessionId);
             }
 
@@ -637,24 +804,35 @@ final class WorkflowExecutor
         }
     }
 
-    /**
-     * Prüft ob Fehler transient ist
-     */
     private function isTransientError(string $error): bool
     {
-        $transient = ['response does not contain', 'rate limit', 'timeout', '503', '429', '500'];
-        return str_contains(strtolower($error), implode('|', $transient));
+        $lowerError = strtolower($error);
+        $transientPatterns = [
+            'response does not contain',
+            'rate limit',
+            'timeout',
+            '503',
+            '429',
+            '500',
+            'temporarily unavailable'
+        ];
+
+        foreach ($transientPatterns as $pattern) {
+            if (str_contains($lowerError, $pattern)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
-    /**
-     * Behandelt Step-Fehler
-     */
     private function handleStepFailure(Workflow $workflow, WorkflowStep $step, \Exception $e): void
     {
         $this->logger->error('Step failed', [
             'workflow_id' => $workflow->getId(),
             'step' => $step->getStepNumber(),
-            'error' => $e->getMessage()
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
         ]);
 
         $step->setStatus('failed');

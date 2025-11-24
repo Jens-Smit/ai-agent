@@ -75,6 +75,8 @@ services:
             $agent: '@ai.agent.personal_assistent'
             $platform: '@ai.traceable_platform.gemini'
 
+    
+
     App\Service\WorkflowEngine:
         arguments:
             $planner: '@App\Service\Workflow\WorkflowPlanner'

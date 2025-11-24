@@ -14,10 +14,6 @@ use Symfony\AI\Platform\Message\Message;
 use Symfony\AI\Platform\Message\MessageBag;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
-/**
- * Workflow-Planer: Erstellt strukturierte Workflows aus User-Intents
- * Mit verbesserter JSON-Extraktion und Validierung
- */
 final class WorkflowPlanner
 {
     public function __construct(
@@ -27,12 +23,8 @@ final class WorkflowPlanner
         private LoggerInterface $logger
     ) {}
 
-    /**
-     * Erstellt Workflow aus User-Intent
-     */
     public function createWorkflowFromIntent(string $userIntent, string $sessionId): Workflow
     {
-        // Agent analysiert Intent und erstellt Workflow-Plan
         $messages = new MessageBag(
             Message::forSystem($this->getWorkflowPlanningPrompt()),
             Message::ofUser($userIntent)
@@ -41,17 +33,15 @@ final class WorkflowPlanner
         $result = $this->agent->call($messages);
         $plan = $this->parseWorkflowPlan($result->getContent());
 
-        // Validiere und optimiere Plan
+        // 🔧 FIX: Validiere und optimiere Plan mit besserer Fehlerbehandlung
         $plan = $this->validateAndOptimizePlan($plan);
 
-        // Erstelle Workflow-Entity
         $workflow = new Workflow();
         $workflow->setSessionId($sessionId);
         $workflow->setUserIntent($userIntent);
         $workflow->setStatus('created');
         $workflow->setCreatedAt(new \DateTimeImmutable());
 
-        // Erstelle Steps
         foreach ($plan['steps'] as $index => $stepData) {
             $step = $this->createStep($workflow, $index + 1, $stepData);
             $workflow->addStep($step);
@@ -69,9 +59,6 @@ final class WorkflowPlanner
         return $workflow;
     }
 
-    /**
-     * Erstellt einzelnen Workflow-Step
-     */
     private function createStep(Workflow $workflow, int $stepNumber, array $stepData): WorkflowStep
     {
         $step = new WorkflowStep();
@@ -84,7 +71,6 @@ final class WorkflowPlanner
         $step->setRequiresConfirmation($stepData['requires_confirmation'] ?? false);
         $step->setStatus('pending');
 
-        // Speichere erwartete Output-Struktur für Analysis/Decision Steps
         if (isset($stepData['output_format'])) {
             $step->setExpectedOutputFormat($stepData['output_format']);
         }
@@ -92,9 +78,6 @@ final class WorkflowPlanner
         return $step;
     }
 
-    /**
-     * Validiert und optimiert Workflow-Plan
-     */
     private function validateAndOptimizePlan(array $plan): array
     {
         if (!isset($plan['steps']) || !is_array($plan['steps']) || empty($plan['steps'])) {
@@ -102,24 +85,30 @@ final class WorkflowPlanner
         }
 
         foreach ($plan['steps'] as $index => &$step) {
-            // Validiere Step-Type
             if (!isset($step['type']) || !in_array($step['type'], ['tool_call', 'analysis', 'decision', 'notification'])) {
                 throw new \RuntimeException("Invalid step type at index {$index}");
             }
 
-            // Setze Defaults
-            $step['description'] = $step['description'] ?? 'Kein Beschreibung';
+            $step['description'] = $step['description'] ?? 'Keine Beschreibung';
             $step['parameters'] = $step['parameters'] ?? [];
             $step['requires_confirmation'] = $step['requires_confirmation'] ?? false;
 
-            // Für Analysis/Decision Steps: Füge strukturierte Output-Format hinzu
+            // 🔧 FIX: Für Analysis/Decision Steps IMMER Output-Format erzwingen
             if (in_array($step['type'], ['analysis', 'decision'])) {
                 if (!isset($step['output_format'])) {
                     $step['output_format'] = $this->inferOutputFormat($step, $plan['steps'], $index);
                 }
+
+                // 🔧 FIX: Stelle sicher, dass output_format richtig strukturiert ist
+                if (isset($step['output_format']) && !isset($step['output_format']['fields'])) {
+                    // Falls output_format direkt die Felder enthält
+                    $step['output_format'] = [
+                        'type' => 'object',
+                        'fields' => $step['output_format']
+                    ];
+                }
             }
 
-            // Validiere Tool-Name bei tool_call
             if ($step['type'] === 'tool_call' && empty($step['tool'])) {
                 throw new \RuntimeException("Missing tool name for tool_call at step {$index}");
             }
@@ -128,23 +117,29 @@ final class WorkflowPlanner
         return $plan;
     }
 
-    /**
-     * Leitet erwartetes Output-Format ab aus nachfolgenden Steps
-     */
     private function inferOutputFormat(array $currentStep, array $allSteps, int $currentIndex): ?array
     {
-        // Suche nach Platzhaltern in nachfolgenden Steps
         $requiredFields = [];
 
+        // Suche in nachfolgenden Steps nach Referenzen
         for ($i = $currentIndex + 1; $i < count($allSteps); $i++) {
             $nextStep = $allSteps[$i];
             $params = json_encode($nextStep['parameters'] ?? []);
 
-            // Finde alle Platzhalter die auf diesen Step verweisen
             $stepRef = 'step_' . ($currentIndex + 1);
             if (preg_match_all('/\{\{' . preg_quote($stepRef) . '\.result\.(\w+)\}\}/', $params, $matches)) {
                 foreach ($matches[1] as $field) {
-                    $requiredFields[$field] = 'string'; // Default type
+                    $requiredFields[$field] = 'string';
+                }
+            }
+        }
+
+        // 🔧 FIX: Auch aus description Felder extrahieren
+        $description = $currentStep['description'] ?? '';
+        if (preg_match_all('/(\w+):\s*"([^"]+)"/', $description, $matches)) {
+            foreach ($matches[1] as $field) {
+                if (!in_array($field, ['type', 'description', 'tool'])) {
+                    $requiredFields[$field] = 'string';
                 }
             }
         }
@@ -159,9 +154,6 @@ final class WorkflowPlanner
         ];
     }
 
-    /**
-     * Parsing des Workflow-Plans vom Agent mit verbesserter Fehlertoleranz
-     */
     private function parseWorkflowPlan(string $content): array
     {
         // Strategie 1: JSON in Code-Blöcken
@@ -193,9 +185,9 @@ final class WorkflowPlanner
             }
         }
 
-        // Bereinige JSON (entferne Kommentare, trailing commas)
-        $json = preg_replace('#//.*#', '', $json); // Entferne Kommentare
-        $json = preg_replace('/,\s*([\]}])/', '$1', $json); // Entferne trailing commas
+        // Bereinige JSON
+        $json = preg_replace('#//.*#', '', $json);
+        $json = preg_replace('/,\s*([\]}])/', '$1', $json);
 
         $plan = json_decode($json, true);
 
@@ -206,65 +198,60 @@ final class WorkflowPlanner
         return $plan;
     }
 
-    /**
-     * System-Prompt für Workflow-Planning mit strukturierter Output-Vorgabe
-     */
     private function getWorkflowPlanningPrompt(): string
     {
         return <<<PROMPT
-Du bist ein Workflow-Planer. Deine Aufgabe ist es, User-Anfragen in ausführbare Workflow-Steps zu zerlegen.
+Du bist ein Workflow-Planer. Erstelle IMMER strukturierte, ausführbare Workflows.
 
-KRITISCH WICHTIG FÜR ANALYSIS/DECISION STEPS:
-Wenn ein Step vom Typ "analysis" oder "decision" ist und nachfolgende Steps auf dessen Ergebnis zugreifen, 
-MUSST du ein "output_format" definieren, das die erwarteten Felder spezifiziert.
+KRITISCH WICHTIG:
+1. JEDER analysis/decision Step MUSS ein "output_format" definieren
+2. Das output_format enthält die EXAKTEN Feldnamen, die nachfolgende Steps benötigen
+3. Verwende {{step_N.result.FELDNAME}} um auf Felder zuzugreifen
 
-VERFÜGBARE STEP-TYPES:
-- tool_call: Ruft ein Tool auf (z.B. Suche, API-Call, Calendar)
-- analysis: Analysiert Daten - MUSS strukturierte JSON-Ausgabe liefern wenn nachfolgende Steps darauf zugreifen
-- decision: Trifft eine Entscheidung - MUSS strukturierte JSON-Ausgabe liefern wenn nachfolgende Steps darauf zugreifen
-- notification: Sendet eine Nachricht an User
+STEP-TYPES:
+- tool_call: Ruft ein Tool auf
+- analysis: Analysiert Daten → MUSS output_format haben
+- decision: Trifft Entscheidung → MUSS output_format haben
+- notification: Sendet Nachricht
 
 VERFÜGBARE TOOLS:
-- job_search: Sucht Jobs/Stellenanzeigen
-- PdfGenerator: Generiert PDF-Dokumente
-- company_career_contact_finder: Findet Karriere-Kontaktdaten von Firmen
-- google_calendar_create_event: Erstellt Kalender-Termine
-- send_email: Versendet E-Mails (erfordert Bestätigung)
-- web_scraper: Extrahiert Daten von Webseiten
-- api_client: Ruft externe APIs auf
-- mysql_knowledge_search: Sucht in Wissensdatenbank
-- user_document_read: Liest und extrahiert Text aus User-Dokumenten
-- user_document_search: Sucht nach Dokumenten anhand von Suchbegriff. Durchsucht Dokumentname, Beschreibung und Tags. Optional kann zusätzlich nach Kategorie gefiltert werden.
-- user_document_metadata: Liest Metadaten eines User-Dokuments (Name, Größe, Typ, Upload-Datum)
-- user_document_list: Listet alle User-Dokumente auf, optional gefiltert nach Kategorie
-- google_search: Führt eine Google-Suche durch und liefert URLs und Snippets
-- information_extractor: Extrahiert Informationen von Webseiten basierend auf einer Suchanfrage
-OUTPUT-FORMAT (NUR JSON, kein Text davor/danach):
+- job_search: Sucht Jobs (Parameter: what, where, size)
+- company_career_contact_finder: Findet Karriere-Kontakte (Parameter: company_name)
+- user_document_search: Sucht Dokumente (Parameter: searchTerm, category)
+- user_document_read: Liest Dokument (Parameter: identifier)
+- user_document_list: Listet Dokumente (Parameter: category)
+- PdfGenerator: Erstellt PDFs (Parameter: text, filename)
+- send_email: Versendet E-Mail (Parameter: to, subject, body, attachments)
+- google_search: Google-Suche (Parameter: query)
+- web_scraper: Scraped Webseite (Parameter: url)
+
+OUTPUT-FORMAT (NUR JSON):
 ```json
 {
   "steps": [
     {
       "type": "tool_call",
-      "description": "Suche nach Backend-Entwickler Jobs in Hamburg",
+      "description": "Suche Jobs in Hamburg",
       "tool": "job_search",
       "parameters": {
-        "query": "Backend Entwickler Hamburg",
-        "limit": 5
-      },
-      "requires_confirmation": false
+        "what": "Entwickler",
+        "where": "Hamburg",
+        "size": 1
+      }
     },
     {
       "type": "analysis",
-      "description": "Extrahiere Firmenname aus Suchergebnissen",
+      "description": "Extrahiere Jobdetails",
       "output_format": {
-        "company_name": "string",
         "job_title": "string",
-        "location": "string"
+        "company_name": "string",
+        "job_description": "string",
+        "job_location": "string"
       }
     },
     {
       "type": "tool_call",
-      "description": "Finde Kontaktdaten der Firma",
+      "description": "Finde Firmenkontakte",
       "tool": "company_career_contact_finder",
       "parameters": {
         "company_name": "{{step_2.result.company_name}}"
@@ -274,30 +261,11 @@ OUTPUT-FORMAT (NUR JSON, kein Text davor/danach):
 }
 ```
 
-WICHTIGE REGELN:
-1. Jeder Step sollte atomar und testbar sein
-2. Verwende {{step_N.result.FIELD}} um auf strukturierte Felder vorheriger Steps zuzugreifen
-3. Bei analysis/decision Steps: Definiere IMMER "output_format" wenn nachfolgende Steps darauf zugreifen
-4. Setze requires_confirmation=true für kritische Aktionen (E-Mail senden, Zahlungen, Termine buchen)
-5. Halte Steps klein und fokussiert - lieber mehr kleine Steps als wenige große
-
-BEISPIEL FÜR STRUKTURIERTE ANALYSIS:
-Falsch ❌:
-{
-  "type": "analysis",
-  "description": "Analysiere Job-Details"
-}
-
-Richtig ✅:
-{
-  "type": "analysis",
-  "description": "Analysiere Job-Details",
-  "output_format": {
-    "company_name": "string",
-    "contact_email": "string",
-    "application_deadline": "string"
-  }
-}
+REGELN:
+1. Output-Format IMMER definieren bei analysis/decision
+2. Feldnamen müssen EXAKT in Platzhaltern verwendet werden
+3. requires_confirmation: true für E-Mails, Termine, Zahlungen
+4. Kleine, atomare Steps bevorzugen
 PROMPT;
     }
 }
