@@ -1,4 +1,6 @@
 <?php
+// src/Entity/WorkflowStep.php
+
 declare(strict_types=1);
 
 namespace App\Entity;
@@ -22,7 +24,7 @@ class WorkflowStep
     private int $stepNumber;
 
     #[ORM\Column(type: 'string', length: 50)]
-    private string $stepType; // tool_call, analysis, decision, notification
+    private string $stepType;
 
     #[ORM\Column(type: 'text')]
     private string $description;
@@ -37,7 +39,7 @@ class WorkflowStep
     private bool $requiresConfirmation = false;
 
     #[ORM\Column(type: 'string', length: 50)]
-    private string $status = 'pending'; // pending, running, completed, failed, cancelled
+    private string $status = 'pending';
 
     #[ORM\Column(type: 'json', nullable: true)]
     private ?array $result = null;
@@ -45,22 +47,18 @@ class WorkflowStep
     #[ORM\Column(type: 'text', nullable: true)]
     private ?string $errorMessage = null;
 
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $emailDetails = null;
+
+    // NEU: Erwartetes Output-Format für strukturierte Analyse
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $expectedOutputFormat = null;
+
     #[ORM\Column(type: 'datetime_immutable', nullable: true)]
     private ?\DateTimeImmutable $completedAt = null;
 
-    #[ORM\Column(type: 'json', nullable: true)]
-    private ?array $emailDetails = null;
-   
-    public function getEmailDetails(): ?array
-    {
-        return $this->emailDetails;
-    }
+    // Getter & Setter
 
-    public function setEmailDetails(?array $emailDetails): self
-    {
-        $this->emailDetails = $emailDetails;
-        return $this;
-    }
     public function getId(): ?int
     {
         return $this->id;
@@ -173,6 +171,29 @@ class WorkflowStep
     public function setErrorMessage(?string $errorMessage): self
     {
         $this->errorMessage = $errorMessage;
+        return $this;
+    }
+
+    public function getEmailDetails(): ?array
+    {
+        return $this->emailDetails;
+    }
+
+    public function setEmailDetails(?array $emailDetails): self
+    {
+        $this->emailDetails = $emailDetails;
+        return $this;
+    }
+
+    // NEU: Getter & Setter für expectedOutputFormat
+    public function getExpectedOutputFormat(): ?array
+    {
+        return $this->expectedOutputFormat;
+    }
+
+    public function setExpectedOutputFormat(?array $expectedOutputFormat): self
+    {
+        $this->expectedOutputFormat = $expectedOutputFormat;
         return $this;
     }
 

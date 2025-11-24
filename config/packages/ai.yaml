@@ -14,85 +14,10 @@ ai:
         name: 'text-embedding-004'
         options:
           dimensions: 768
-
+ 
   
 
   agent:
-    file_generator:
-      platform: 'ai.platform.gemini'
-      model: 'gemini-2.5-flash'
-      track_token_usage: true
-      prompt:
-        file: '%kernel.project_dir%/config/prompts/default_prompt.txt'
-        include_tools: true
-      tools:
-        - 'App\Tool\CodeSaverTool'
-        - 'App\Tool\KnowledgeIndexerTool'
-        - 'App\Tool\AnalyzeCodeTool'
-        - 'App\Tool\SandboxExecutorTool'
-        - 'App\Tool\DeployGeneratedCodeTool'
-        - 'App\Tool\WebScraperTool'
-        - 'App\Tool\ApiClientTool'
-        - 'App\Tool\MySQLKnowledgeSearchTool'
-        - 'App\Tool\GitHubIssueManagerTool'
-        
-        
-      fault_tolerant_toolbox: true
-
-    frontend_generator:
-      platform: 'ai.platform.gemini'
-      model: 'gemini-2.5-flash'
-        
-      track_token_usage: true
-      prompt:
-        file: '%kernel.project_dir%/config/prompts/frontend_dev_prompt.txt'
-        include_tools: true
-      tools:
-        - 'App\Tool\CodeSaverTool'
-        - 'App\Tool\KnowledgeIndexerTool'
-        - 'App\Tool\AnalyzeCodeTool'
-        - 'App\Tool\SandboxExecutorTool'
-        - 'App\Tool\DeployGeneratedCodeTool'
-        - 'App\Tool\WebScraperTool'
-        - 'App\Tool\ApiClientTool'
-        
-      fault_tolerant_toolbox: true
-      ### Alternative LLM Configurations for the File Generator Agent openAi ###
-    file_generator_huggingface:
-      platform: 'ai.platform.gemini'
-      model: 'gemini-2.5-flash-lite'
-      track_token_usage: true
-      prompt:
-        file: '%kernel.project_dir%/config/prompts/file_generator_prompt.txt'
-        include_tools: true
-      tools:
-        - 'App\Tool\CodeSaverTool'
-        - 'App\Tool\KnowledgeIndexerTool'
-        - 'App\Tool\AnalyzeCodeTool'
-        - 'App\Tool\SandboxExecutorTool'
-        - 'App\Tool\DeployGeneratedCodeTool'
-        - 'App\Tool\WebScraperTool'
-        - 'App\Tool\ApiClientTool'
-        - 'App\Tool\MySQLKnowledgeSearchTool'
-        - 'App\Tool\GitHubIssueManagerTool'
-      fault_tolerant_toolbox: true
-    ### Alternative LLM Configurations for the File Generator Agent claude ###
-    file_generator_claud:
-      platform: 'ai.platform.anthropic'
-      model: 'claude-3-opus-20240229' # oder 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307'
-      track_token_usage: true
-      prompt:
-        file: '%kernel.project_dir%/config/prompts/file_generator_prompt.txt'
-        include_tools: true
-      tools:
-        - 'App\Tool\CodeSaverTool'
-        - 'App\Tool\KnowledgeIndexerTool'
-        - 'App\Tool\AnalyzeCodeTool'
-        - 'App\Tool\SandboxExecutorTool'
-        - 'App\Tool\DeployGeneratedCodeTool'
-        - 'App\Tool\WebScraperTool'
-        - 'App\Tool\ApiClientTool'
-      fault_tolerant_toolbox: true
     #   personal_assistent:
     personal_assistent:
       platform: 'ai.platform.gemini'
@@ -131,9 +56,9 @@ ai:
        
       fault_tolerant_toolbox: true
       ### Alternative LLM Configurations for the File Generator Agent openAi ###
-    personal_assistent_openAi:
-      platform: 'ai.platform.openai'
-      model: 'gpt-4o-mini'
+    personal_assistent_fallback:
+      platform: 'ai.platform.gemini'
+      model: 'gemini-2.5-flash-lite'
       track_token_usage: true
       prompt:
         file: '%kernel.project_dir%/config/prompts/file_personal_assistent_prompt.txt'

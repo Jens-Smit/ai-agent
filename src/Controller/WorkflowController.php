@@ -90,8 +90,7 @@ class WorkflowController extends AbstractController
         ]);
 
         try {
-            // --- START REFACTORING ---
-            // Wir nutzen nun die neue dynamische Methode statt der 3 alten Schritte.
+          
             
             $this->statusService->addStatus($sessionId, '🤖 KI analysiert Intent und Tool-Landschaft...');
 
@@ -111,7 +110,6 @@ class WorkflowController extends AbstractController
             // um den Frontend-Vertrag einzuhalten.
             $missingToolsForFrontend = []; 
 
-            // --- END REFACTORING ---
 
             // 4. Erstelle Workflow
             $this->statusService->addStatus($sessionId, '📋 Erstelle Workflow-Plan...');

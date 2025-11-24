@@ -82,48 +82,5 @@ class PersonalAssistantController extends AbstractController
         ], Response::HTTP_OK);
     }
 
-    #[Route('/frondend_devAgent', name: 'frondend_devAgent', methods: ['POST'])]
-    #[OA\Post(
-        summary: 'Frontend Generator AI Agent (Async)',
-        description: 'Startet den Frontend Generator asynchron.',
-        requestBody: new OA\RequestBody(
-            required: true,
-            content: new OA\JsonContent(ref: '#/components/schemas/AgentPromptRequest')
-        ),
-        responses: [
-            new OA\Response(response: 200, description: 'Job in Warteschlange'),
-            new OA\Response(response: 400, description: 'Ungültige Anfrage')
-        ]
-    )]
-    public function generateFrondend(Request $request, MessageBusInterface $bus): JsonResponse
-    {
-        $data = json_decode($request->getContent(), true);
-        $prompt = $data['prompt'] ?? '';
-
-        if (empty($prompt)) {
-            return $this->json([
-                'status' => 'error',
-                'message' => 'Kein Prompt angegeben',
-            ], Response::HTTP_BAD_REQUEST);
-        }
-
-        $sessionId = Uuid::v4()->toRfc4122();
-
-        $this->logger->info('Frontend Generator Job wird zur Warteschlange hinzugefügt', [
-            'sessionId' => $sessionId
-        ]);
-
-        $bus->dispatch(new \App\Message\FrontendGeneratorJob(
-            prompt: $prompt,
-            sessionId: $sessionId,
-            userId: $this->getUser()?->getId()
-        ));
-
-        return $this->json([
-            'status' => 'queued',
-            'sessionId' => $sessionId,
-            'message' => 'Frontend Generator Job zur Warteschlange hinzugefügt.',
-            'statusUrl' => '/api/agent/status/' . $sessionId
-        ], Response::HTTP_OK);
-    }
+   
 }

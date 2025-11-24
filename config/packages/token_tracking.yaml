@@ -1,0 +1,46 @@
+# config/packages/token_tracking.yaml
+
+services:
+    # Token Tracking Service
+    App\Service\TokenTrackingService:
+        arguments:
+            $em: '@doctrine.orm.entity_manager'
+            $tokenUsageRepo: '@App\Repository\TokenUsageRepository'
+            $settingsRepo: '@App\Repository\UserLlmSettingsRepository'
+            $logger: '@logger'
+        tags:
+            - { name: 'monolog.logger', channel: 'token_tracking' }
+
+    # Repositories
+    App\Repository\TokenUsageRepository:
+        class: App\Repository\TokenUsageRepository
+        arguments:
+            - '@doctrine'
+        tags:
+            - { name: 'doctrine.repository_service' }
+
+    App\Repository\UserLlmSettingsRepository:
+        class: App\Repository\UserLlmSettingsRepository
+        arguments:
+            - '@doctrine'
+        tags:
+            - { name: 'doctrine.repository_service' }
+
+    # HTTP Client Decorator für Token Tracking
+    App\EventSubscriber\TokenTrackingHttpClient:
+        decorates: 'http_client'
+        arguments:
+            $client: '@.inner'
+            $tokenService: '@App\Service\TokenTrackingService'
+            $logger: '@logger'
+            $em: '@doctrine.orm.entity_manager'
+        tags:
+            - { name: 'monolog.logger', channel: 'token_tracking' }
+
+    # Controller
+    App\Controller\TokenUsageController:
+        arguments:
+            $tokenService: '@App\Service\TokenTrackingService'
+            $settingsRepo: '@App\Repository\UserLlmSettingsRepository'
+            $em: '@doctrine.orm.entity_manager'
+        tags: ['controller.service_arguments']

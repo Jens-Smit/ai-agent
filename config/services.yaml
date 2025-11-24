@@ -65,18 +65,21 @@ services:
             - '%env(HUGGINGFACE_API_KEY)%'
         ### Services & Tools ###
         ### Services ###
-    # WorkflowEngine Service
-    App\Service\WorkflowEngine:
+    # Workflow Services
+    App\Service\Workflow\WorkflowPlanner:
         arguments:
             $agent: '@ai.agent.personal_assistent'
-            $em: '@doctrine.orm.entity_manager'
-            $workflowRepo: '@App\Repository\WorkflowRepository'
-            $documentRepo: '@App\Repository\UserDocumentRepository'
-            $statusService: '@App\Service\AgentStatusService'
-            $logger: '@logger'
-            $projectRootDir: '%kernel.project_dir%'
-        tags:
-            - { name: 'monolog.logger', channel: 'workflow' }
+
+    App\Service\Workflow\WorkflowExecutor:
+        arguments:
+            $agent: '@ai.agent.personal_assistent'
+            $platform: '@ai.traceable_platform.gemini'
+
+    App\Service\WorkflowEngine:
+        arguments:
+            $planner: '@App\Service\Workflow\WorkflowPlanner'
+            $executor: '@App\Service\Workflow\WorkflowExecutor'
+
     # AgentStatusService mit EntityManager
     App\Service\AgentStatusService:
         arguments:
@@ -107,18 +110,7 @@ services:
             - { name: 'monolog.logger', channel: 'circuit_breaker' }
 
     
-    # FrontendAgentService mit Circuit Breaker
-    App\Service\FrontendAgentService:
-        arguments:
-            $agent: '@ai.agent.frontend_generator'
-            $logger: '@logger'
-            $agentStatusService: '@App\Service\AgentStatusService'
-            $deployTool: '@App\Tool\DeployGeneratedCodeTool'
-            $bus: '@messenger.default_bus'
-            $conn: '@doctrine.dbal.default_connection'
-            $circuitBreaker: '@App\Service\CircuitBreakerService'
-        tags:
-            - { name: 'monolog.logger', channel: 'ai_agent' }
+   
  # UserKnowledgeService
     App\Service\UserKnowledgeService:
         arguments:
@@ -145,34 +137,11 @@ services:
         tags:
             - { name: 'monolog.logger', channel: 'ai_agent' }
 
-    # AiAgentService - jetzt mit FallbackWrapper
-    App\Service\AiAgentService:
-        arguments:
-            $agent: '@App\Service\FallbackAgentWrapper'  # Wrapper statt direktem Agent
-            $logger: '@logger'
-            $appDynamicAgent: '@ai.agent.file_generator'
-            $agentStatusService: '@App\Service\AgentStatusService'
-            $deployTool: '@App\Tool\DeployGeneratedCodeTool'
-            $bus: '@messenger.default_bus'
-            $conn: '@doctrine.dbal.default_connection'
-            $circuitBreaker: '@App\Service\CircuitBreakerService'
-        tags:
-            - { name: 'monolog.logger', channel: 'ai_agent' }
+  
      
             ### Tools ###
 
-    # CodeSaverTool
-    App\Tool\CodeSaverTool:
-        arguments:
-            $logger: '@logger'
-        tags:
-            - { name: 'ai.tool' }
     
-    # AnalyzeCodeTool
-    App\Tool\AnalyzeCodeTool:
-        autowire: true
-        autoconfigure: true
-        public: false  
     # ReceiveMailTool 
     App\Tool\ReceiveMailTool:
         arguments:
@@ -190,16 +159,7 @@ services:
             $projectRootDir: '%kernel.project_dir%'
         tags: ['ai.tool']
  
-    # SandboxExecutorTool
-    App\Tool\SandboxExecutorTool:
-        arguments:
-            # Manuelle Definition der Abhängigkeiten, falls autowire deaktiviert ist
-            $kernel: '@kernel'
-            $logger: '@logger'
-            $statusService: '@App\Service\AgentStatusService'
-        tags:
-            # WICHTIG: Manuelles Tagging für das AI-Bundle
-            - { name: 'symfony.ai.tool', alias: 'run_code_in_sandbox' }
+    
     # WebScraperTool
     App\Tool\WebScraperTool:
         arguments:
@@ -307,14 +267,7 @@ services:
             $security: '@security.helper'
         tags: ['ai.tool']
 
-    # GitHubIssueManagerTool
-    App\Tool\GitHubIssueManagerTool:
-        arguments:
-            $httpClient: '@http_client'
-            $logger: '@logger'
-            $githubAccessToken: '%env(GITHUB_ACCESS_TOKEN)%'
-            $githubRepo: '%env(DEV_AGENT_GITHUB_REPO)%'
-        tags: ['ai.tool']
+    
       # BatchPdfGenerator  
     App\Tool\BatchPdfGenerator:
         arguments:
