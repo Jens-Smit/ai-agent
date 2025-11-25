@@ -619,6 +619,9 @@ Daten zur Analyse:
         ];
     }
 
+   /**
+     * ✅ OPTIMIERT: E-Mail-Details werden vorbereitet und Workflow pausiert
+     */
     private function prepareSendMailDetails(
         WorkflowStep $step,
         array $parameters,
@@ -640,6 +643,7 @@ Daten zur Analyse:
             $attachmentIds = [$attachmentIds];
         }
 
+        // Lade Anhänge mit vollständigen Details
         $attachmentDetails = [];
         foreach ($attachmentIds as $docId) {
             if (empty($docId)) continue;
@@ -651,28 +655,41 @@ Daten zur Analyse:
                     'filename' => $document->getOriginalFilename(),
                     'size' => $document->getFileSize(),
                     'size_human' => $this->formatBytes($document->getFileSize()),
-                    'mime_type' => $document->getMimeType()
+                    'mime_type' => $document->getMimeType(),
+                    'download_url' => sprintf('/api/documents/%d/download', $document->getId())
                 ];
             }
         }
 
+        // ✅ NEU: Erstelle strukturierte E-Mail-Details
         $emailDetails = [
             'recipient' => $recipient,
             'subject' => $subject,
             'body' => $body,
             'body_preview' => mb_substr(strip_tags($body), 0, 200) . '...',
+            'body_length' => mb_strlen($body),
             'attachments' => $attachmentDetails,
             'attachment_count' => count($attachmentDetails),
             'ready_to_send' => true,
+            'created_at' => (new \DateTimeImmutable())->format('c'),
             '_original_params' => $parameters
         ];
 
+        // Speichere E-Mail-Details im Step
         $step->setEmailDetails($emailDetails);
+        
+        // ✅ WICHTIG: Status auf 'pending_confirmation' statt 'failed'
+        $step->setStatus('pending_confirmation');
+        $step->setRequiresConfirmation(true);
+        
         $this->em->flush();
 
         $this->statusService->addStatus(
             $sessionId,
-            sprintf('📧 E-Mail vorbereitet an %s - Betreff: "%s"', $recipient, mb_substr($subject, 0, 50))
+            sprintf('📧 E-Mail vorbereitet an %s - Betreff: "%s" (wartet auf Freigabe)', 
+                $recipient, 
+                mb_substr($subject, 0, 50)
+            )
         );
 
         return [
@@ -682,34 +699,108 @@ Daten zur Analyse:
         ];
     }
 
-    private function executeSendEmail(WorkflowStep $step, string $sessionId): array
+    /**
+     * ✅ OPTIMIERT: E-Mail wird tatsächlich versendet
+     */
+    private function executeSendEmail(WorkflowStep $step, string $sessionId, ?User $user): array
     {
         $emailDetails = $step->getEmailDetails();
 
+        if (!$emailDetails || !isset($emailDetails['_original_params'])) {
+            throw new \RuntimeException('Email details not found or incomplete');
+        }
+
+        // Verwende Original-Parameter für Tool-Aufruf
+        $params = $emailDetails['_original_params'];
+
         $prompt = sprintf(
-            'Sende E-Mail: %s',
-            json_encode([
-                'to' => $emailDetails['recipient'],
-                'subject' => $emailDetails['subject'],
-                'body' => $emailDetails['body'],
-                'attachments' => array_column($emailDetails['attachments'], 'id')
-            ])
+            'Sende E-Mail mit folgenden Details: %s',
+            json_encode($params, JSON_UNESCAPED_UNICODE)
         );
 
         $messages = new MessageBag(Message::ofUser($prompt));
-        $result = $this->agent->call($messages);
+        
+        try {
+            $result = $this->callAgentWithFallback($messages, $sessionId);
+
+            $this->statusService->addStatus(
+                $sessionId,
+                sprintf('✅ E-Mail erfolgreich versendet an %s', $emailDetails['recipient'])
+            );
+
+            return [
+                'tool' => 'send_email',
+                'status' => 'sent',
+                'recipient' => $emailDetails['recipient'],
+                'subject' => $emailDetails['subject'],
+                'sent_at' => (new \DateTimeImmutable())->format('c'),
+                'result' => $result->getContent()
+            ];
+            
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to send email', [
+                'error' => $e->getMessage(),
+                'recipient' => $emailDetails['recipient']
+            ]);
+            
+            throw new \RuntimeException('E-Mail konnte nicht versendet werden: ' . $e->getMessage());
+        }
+    }
+    /**
+     * ✅ NEU: Bestätigt und versendet E-Mail
+     */
+    public function confirmAndSendEmail(Workflow $workflow, WorkflowStep $step, ?User $user): void
+    {
+        if ($step->getToolName() !== 'send_email' && $step->getToolName() !== 'SendMailTool') {
+            throw new \RuntimeException('Step is not an email step');
+        }
+
+        if ($step->getStatus() !== 'pending_confirmation') {
+            throw new \RuntimeException('Email is not pending confirmation');
+        }
+
+        try {
+            // Versende E-Mail
+            $result = $this->executeSendEmail($step, $workflow->getSessionId(), $user);
+            
+            $step->setResult($result);
+            $step->setStatus('completed');
+            $step->setCompletedAt(new \DateTimeImmutable());
+            
+            $workflow->setStatus('running');
+            $workflow->setCurrentStep(null);
+            
+            $this->em->flush();
+
+            // Setze Workflow fort
+            $this->executeWorkflow($workflow, $user);
+            
+        } catch (\Exception $e) {
+            $this->handleStepFailure($workflow, $step, $e);
+            throw $e;
+        }
+    }
+    /**
+     * ✅ NEU: Lehnt E-Mail ab und beendet Workflow
+     */
+    public function rejectEmail(Workflow $workflow, WorkflowStep $step): void
+    {
+        if ($step->getStatus() !== 'pending_confirmation') {
+            throw new \RuntimeException('Email is not pending confirmation');
+        }
+
+        $step->setStatus('rejected');
+        $step->setErrorMessage('Email rejected by user');
+        
+        $workflow->setStatus('cancelled');
+        $workflow->setCurrentStep(null);
+        
+        $this->em->flush();
 
         $this->statusService->addStatus(
-            $sessionId,
-            sprintf('✅ E-Mail versendet an %s', $emailDetails['recipient'])
+            $workflow->getSessionId(),
+            '❌ E-Mail abgelehnt - Workflow abgebrochen'
         );
-
-        return [
-            'tool' => 'send_email',
-            'status' => 'sent',
-            'recipient' => $emailDetails['recipient'],
-            'sent_at' => (new \DateTimeImmutable())->format('c')
-        ];
     }
 
     // 🔧 FIX: Verbesserte Platzhalter-Auflösung mit Debugging

@@ -12,6 +12,7 @@ use App\Repository\WorkflowRepository;
 use App\Service\AgentStatusService;
 use App\Service\ToolCapabilityChecker;
 use App\Service\WorkflowEngine;
+use App\Service\Workflow\WorkflowExecutor;
 use Doctrine\ORM\EntityManagerInterface;
 use OpenApi\Attributes as OA;
 use Psr\Log\LoggerInterface;
@@ -28,6 +29,7 @@ class WorkflowController extends AbstractController
 {
     public function __construct(
         private WorkflowEngine $workflowEngine,
+        private WorkflowExecutor $workflowExecutor,
         private WorkflowRepository $workflowRepo,
         private ToolCapabilityChecker $capabilityChecker,
         private AgentStatusService $statusService,
@@ -441,7 +443,288 @@ class WorkflowController extends AbstractController
             ]
         ]);
     }
+    /**
+     * ✅ NEU: Holt alle ausstehenden E-Mails eines Workflows
+     */
+    #[Route('/{workflowId}/pending-emails', name: 'pending_emails', methods: ['GET'])]
+    #[OA\Get(
+        summary: 'Holt alle ausstehenden E-Mails eines Workflows',
+        parameters: [
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true, schema: new OA\Schema(type: 'integer'))
+        ],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: 'Liste der ausstehenden E-Mails',
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(property: 'workflow_id', type: 'integer'),
+                        new OA\Property(property: 'workflow_status', type: 'string'),
+                        new OA\Property(
+                            property: 'pending_emails',
+                            type: 'array',
+                            items: new OA\Items(
+                                properties: [
+                                    new OA\Property(property: 'step_id', type: 'integer'),
+                                    new OA\Property(property: 'step_number', type: 'integer'),
+                                    new OA\Property(property: 'recipient', type: 'string'),
+                                    new OA\Property(property: 'subject', type: 'string'),
+                                    new OA\Property(property: 'body_preview', type: 'string'),
+                                    new OA\Property(property: 'attachment_count', type: 'integer'),
+                                    new OA\Property(property: 'created_at', type: 'string'),
+                                ]
+                            )
+                        )
+                    ]
+                )
+            )
+        ]
+    )]
+    public function getPendingEmails(int $workflowId): JsonResponse
+    {
+        $workflow = $this->workflowRepo->find($workflowId);
 
+        if (!$workflow) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $pendingEmails = [];
+
+        foreach ($workflow->getSteps() as $step) {
+            if ($step->getStatus() === 'pending_confirmation' && 
+                in_array($step->getToolName(), ['send_email', 'SendMailTool']) &&
+                $step->getEmailDetails()) {
+                
+                $details = $step->getEmailDetails();
+                
+                $pendingEmails[] = [
+                    'step_id' => $step->getId(),
+                    'step_number' => $step->getStepNumber(),
+                    'recipient' => $details['recipient'],
+                    'subject' => $details['subject'],
+                    'body_preview' => $details['body_preview'] ?? mb_substr($details['body'], 0, 200),
+                    'attachment_count' => $details['attachment_count'] ?? 0,
+                    'created_at' => $details['created_at'] ?? null,
+                    'status' => 'pending'
+                ];
+            }
+        }
+
+        return $this->json([
+            'workflow_id' => $workflow->getId(),
+            'workflow_status' => $workflow->getStatus(),
+            'pending_count' => count($pendingEmails),
+            'pending_emails' => $pendingEmails
+        ]);
+    }
+
+    /**
+     * ✅ NEU: Holt vollständige E-Mail-Details eines Steps
+     */
+    #[Route('/step/{stepId}/email', name: 'step_email_details', methods: ['GET'])]
+    #[OA\Get(
+        summary: 'Holt vollständige E-Mail-Details eines Steps',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true, schema: new OA\Schema(type: 'integer'))
+        ]
+    )]
+    public function getStepEmailDetails(int $stepId): JsonResponse
+    {
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
+        if (!$step) {
+            return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $emailDetails = $step->getEmailDetails();
+        
+        if (!$emailDetails) {
+            return $this->json(['error' => 'No email details available'], Response::HTTP_NOT_FOUND);
+        }
+
+        // Erweitere Attachment-Details mit Download-URLs
+        if (isset($emailDetails['attachments'])) {
+            foreach ($emailDetails['attachments'] as &$attachment) {
+                $attachment['preview_url'] = sprintf(
+                    '/api/workflow/step/%d/attachment/%d/preview',
+                    $stepId,
+                    $attachment['id']
+                );
+                $attachment['download_url'] = sprintf(
+                    '/api/workflow/step/%d/attachment/%d/download',
+                    $stepId,
+                    $attachment['id']
+                );
+            }
+        }
+
+        return $this->json([
+            'step_id' => $stepId,
+            'step_number' => $step->getStepNumber(),
+            'status' => $step->getStatus(),
+            'email_details' => $emailDetails,
+            'can_send' => $step->getStatus() === 'pending_confirmation',
+            'can_reject' => $step->getStatus() === 'pending_confirmation'
+        ]);
+    }
+
+    /**
+     * ✅ NEU: Sendet eine ausstehende E-Mail
+     */
+    #[Route('/step/{stepId}/send-email', name: 'send_email', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Sendet eine ausstehende E-Mail',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true)
+        ],
+        responses: [
+            new OA\Response(response: 200, description: 'E-Mail erfolgreich versendet'),
+            new OA\Response(response: 400, description: 'E-Mail kann nicht versendet werden')
+        ]
+    )]
+    public function sendEmail(int $stepId): JsonResponse
+    {
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
+        if (!$step) {
+            return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        if ($step->getStatus() !== 'pending_confirmation') {
+            return $this->json([
+                'error' => 'Email is not pending confirmation',
+                'current_status' => $step->getStatus()
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $workflow = $step->getWorkflow();
+        /** @var User $user */
+        $user = $this->getUser();
+
+        try {
+            $this->workflowExecutor->confirmAndSendEmail($workflow, $step, $user);
+
+            return $this->json([
+                'status' => 'success',
+                'message' => 'Email sent successfully',
+                'step_id' => $stepId,
+                'step_status' => 'completed',
+                'workflow_status' => $workflow->getStatus(),
+                'sent_at' => (new \DateTimeImmutable())->format('c')
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to send email', [
+                'step_id' => $stepId,
+                'error' => $e->getMessage()
+            ]);
+
+            return $this->json([
+                'error' => 'Failed to send email',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * ✅ NEU: Lehnt eine ausstehende E-Mail ab
+     */
+    #[Route('/step/{stepId}/reject-email', name: 'reject_email', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Lehnt eine ausstehende E-Mail ab',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true)
+        ]
+    )]
+    public function rejectEmail(int $stepId): JsonResponse
+    {
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
+        if (!$step) {
+            return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        if ($step->getStatus() !== 'pending_confirmation') {
+            return $this->json([
+                'error' => 'Email is not pending confirmation',
+                'current_status' => $step->getStatus()
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $workflow = $step->getWorkflow();
+
+        try {
+            $this->workflowExecutor->rejectEmail($workflow, $step);
+
+            return $this->json([
+                'status' => 'success',
+                'message' => 'Email rejected',
+                'step_id' => $stepId,
+                'step_status' => 'rejected',
+                'workflow_status' => $workflow->getStatus()
+            ]);
+
+        } catch (\Exception $e) {
+            return $this->json([
+                'error' => 'Failed to reject email',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Vorschau eines Anhangs
+     */
+    #[Route('/step/{stepId}/attachment/{attachmentId}/preview', name: 'step_attachment_preview', methods: ['GET'])]
+    public function previewAttachment(int $stepId, int $attachmentId): Response
+    {
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+        if (!$step) {
+            throw $this->createNotFoundException('Step not found');
+        }
+
+        $document = $this->em->getRepository(UserDocument::class)->find($attachmentId);
+        if (!$document) {
+            throw $this->createNotFoundException('Document not found');
+        }
+
+        $filePath = $document->getFullPath();
+        if (!file_exists($filePath)) {
+            throw $this->createNotFoundException('File not found');
+        }
+
+        return new BinaryFileResponse($filePath);
+    }
+
+    /**
+     * Download eines Anhangs
+     */
+    #[Route('/step/{stepId}/attachment/{attachmentId}/download', name: 'step_attachment_download', methods: ['GET'])]
+    public function downloadAttachment(int $stepId, int $attachmentId): Response
+    {
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+        if (!$step) {
+            throw $this->createNotFoundException('Step not found');
+        }
+
+        $document = $this->em->getRepository(UserDocument::class)->find($attachmentId);
+        if (!$document) {
+            throw $this->createNotFoundException('Document not found');
+        }
+
+        $filePath = $document->getFullPath();
+        if (!file_exists($filePath)) {
+            throw $this->createNotFoundException('File not found');
+        }
+
+        $response = new BinaryFileResponse($filePath);
+        $response->setContentDisposition(
+            'attachment',
+            $document->getOriginalFilename()
+        );
+
+        return $response;
+    }
     /**
      * Hilfsmethode für unscharfes Matching im Legacy-Endpoint
      */
