@@ -142,8 +142,27 @@ services:
   
      
             ### Tools ###
-
+     # CodeSaverTool
+    App\Tool\CodeSaverTool:
+        arguments:
+            $logger: '@logger'
+        tags:
+            - { name: 'ai.tool' }
     
+    # AnalyzeCodeTool
+    App\Tool\AnalyzeCodeTool:
+        autowire: true
+        autoconfigure: true
+        public: false 
+    # SandboxExecutorTool
+    App\Tool\SandboxExecutorTool:
+        arguments:
+            # Manuelle Definition der Abhängigkeiten, falls autowire deaktiviert ist
+            $kernel: '@kernel'
+            $logger: '@logger'
+        tags:
+            # WICHTIG: Manuelles Tagging für das AI-Bundle
+            - { name: 'symfony.ai.tool', alias: 'run_code_in_sandbox' }
     # ReceiveMailTool 
     App\Tool\ReceiveMailTool:
         arguments:
@@ -186,7 +205,8 @@ services:
     App\Tool\PdfGenerator:
         arguments:
             $logger: '@logger'
-            $projectRootDir: '%kernel.project_dir%'
+            $security: '@security.helper'
+            $documentService: '@App\Service\UserDocumentService'
         tags: ['ai.tool']
     
     # Updated KnowledgeIndexerTool mit MySQL Support

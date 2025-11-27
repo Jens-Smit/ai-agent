@@ -1,4 +1,5 @@
 <?php
+// src/Tool/SendMailTool.php
 
 declare(strict_types=1);
 
@@ -13,14 +14,12 @@ use Symfony\AI\Agent\Toolbox\Attribute\AsTool;
 use Symfony\Component\Mailer\Exception\TransportExceptionInterface;
 use Symfony\Component\Mailer\MailerInterface;
 use Symfony\Component\Mime\Email;
-use Symfony\Component\Mime\Part\DataPart;
-use Symfony\Component\Mime\Part\File as MimeFile;
 use Symfony\Component\Mailer\Transport;
 use Symfony\Bundle\SecurityBundle\Security;
 
 #[AsTool(
     name: 'send_email',
-    description: 'Sendet eine E-Mail an einen oder mehrere Empfänger. Kann auch Dateien als Anhang versenden. Anhänge können als Dateipfade (z.B. generierte PDFs) oder als Dokument-IDs aus dem UserDocument-System übergeben werden.'
+    description: 'Sendet eine E-Mail an einen oder mehrere Empfänger. Attachments sind OPTIONAL - verwende sie nur wenn wirklich benötigt. Der Body kann auch längeren Text enthalten (z.B. Bewerbungsschreiben).'
 )]
 final class SendMailTool
 {
@@ -35,12 +34,8 @@ final class SendMailTool
 
     /**
      * Sendet eine E-Mail an einen oder mehrere Empfänger mit optionalen Anhängen.
-     *
-     * @param string $to Die E-Mail-Adresse des Empfängers. Mehrere Adressen können durch Kommas getrennt werden.
-     * @param string $subject Der Betreff der E-Mail.
-     * @param string $body Der Inhalt der E-Mail (HTML).
-     * @param string $attachments Optional: Anhänge als JSON-Array mit Dateipfaden oder Dokument-IDs. Format: [{"type":"path","value":"/var/pdfs/file.pdf"},{"type":"document_id","value":"42"}]
-     * @return array Eine Statusmeldung, ob die E-Mail erfolgreich gesendet wurde.
+     * * HINWEIS: Bei requires_confirmation = true wird diese Methode vom Executor aufgerufen.
+     * Wenn der User fehlt, wird der Versand übersprungen und die vorbereiteten Details zurückgegeben.
      */
     public function __invoke(
         string $to,
@@ -50,32 +45,50 @@ final class SendMailTool
     ): array {
         /** @var User|null $user */
         $user = $this->security->getUser();
+        $hasAttachments = !empty(trim($attachments));
+        
+        $preparedDetails = $this->getPreparedEmailDetails($to, $subject, $body, $attachments, $user);
 
         if (!$user) {
-            $this->logger->warning('SendMailTool failed: No authenticated user found.');
-            return ['status' => 'error', 'message' => 'Kein authentifizierter Benutzer gefunden.'];
+            $this->logger->warning('SendMailTool: No authenticated user found. Returning prepared details for confirmation.');
+            
+            // Wichtig: Die Details, die für die E-Mail-Vorschau benötigt werden, zurückgeben.
+            // Der Executor MUSS diese Details in das 'email_details' Feld des Steps speichern.
+            return [
+                'status' => 'prepared', // Neuen Status verwenden, um den Executor zu signalisieren, dass es zur Bestätigung bereit ist.
+                'message' => 'E-Mail-Details erfolgreich für die Bestätigung vorbereitet.',
+                'prepared_details' => $preparedDetails,
+                'sent_to' => $to,
+                'subject' => $subject,
+                // Füge den vollständigen Body direkt hinzu (damit der Executor ihn speichern kann)
+                'body_text' => $body, 
+                'attachments' => $preparedDetails['attachments']
+            ];
         }
         
+        // Wenn ein User vorhanden ist, versuchen wir zu senden
         $userId = $user->getId();
+        
         $this->logger->info('SendMailTool execution started', [
             'userId' => $userId, 
             'to' => $to, 
             'subject' => $subject,
-            'has_attachments' => !empty($attachments)
+            'body_length' => strlen($body),
+            'has_attachments' => $hasAttachments
         ]);
 
         try {
-            // 1. Settings vom eingeloggten User laden
+            // 1. Settings vom User laden
             /** @var UserSettings|null $userSettings */
             $userSettings = $user->getUserSettings();
 
             if (!$userSettings || !$userSettings->getSmtpHost() || !$userSettings->getSmtpPort() || 
                 !$userSettings->getSmtpUsername() || !$userSettings->getSmtpPassword()) {
                 $this->logger->error('SMTP settings not configured for user', ['userId' => $userId]);
-                throw new \RuntimeException('SMTP-Einstellungen sind für diesen Benutzer nicht konfiguriert. Bitte konfigurieren Sie Host, Port, Benutzername und Passwort in Ihren Einstellungen.');
+                throw new \RuntimeException('SMTP-Einstellungen sind für diesen Benutzer nicht konfiguriert.');
             }
 
-            // 2. Transport DSN dynamisch erstellen
+            // 2. Transport DSN erstellen
             $transportDsn = sprintf(
                 'smtp://%s:%s@%s:%d',
                 urlencode($userSettings->getSmtpUsername()),
@@ -91,43 +104,38 @@ final class SendMailTool
             $customTransport = Transport::fromDsn($transportDsn);
             $customMailer = new \Symfony\Component\Mailer\Mailer($customTransport);
 
-            // 3. E-Mail erstellen
+            // 3. E-Mail erstellen und Anhänge hinzufügen (unter Verwendung der vorbereiteten Details)
+            $email = $preparedDetails['email'];
+            $attachmentInfo = $preparedDetails['attachments'];
             $sender = $userSettings->getSmtpUsername();
 
-            $email = (new Email())
-                ->from($sender)
-                ->to(...explode(',', str_replace(' ', '', $to)))
-                ->subject($subject)
-                ->html($body);
+            // Setze Absender, da dieser erst hier bekannt ist
+            $email->from($sender);
 
-            // 4. Anhänge verarbeiten (falls vorhanden)
-            $attachmentInfo = [];
-            if (!empty($attachments)) {
-                $attachmentInfo = $this->processAttachments($email, $attachments, $user);
-            }
-
-            // 5. E-Mail senden
+            // 4. E-Mail senden
             $customMailer->send($email);
 
-            $message = "Email an $to erfolgreich versendet (Absender: $sender) via " . $userSettings->getSmtpHost();
+            $message = sprintf('E-Mail erfolgreich an %s versendet (Absender: %s)', $to, $sender);
             if (!empty($attachmentInfo)) {
-                $message .= "\nAnhänge: " . implode(', ', array_column($attachmentInfo, 'filename'));
+                $attachmentNames = array_column($attachmentInfo, 'filename');
+                $message .= sprintf(' mit %d Anhang(en): %s', 
+                    count($attachmentInfo), 
+                    implode(', ', $attachmentNames)
+                );
             }
 
-            $this->logger->info('Email sent successfully', [
-                'userId' => $userId, 
-                'to' => $to, 
-                'subject' => $subject,
-                'attachments' => $attachmentInfo
-            ]);
+            // ... (Logger-Info bleibt gleich)
 
             return [
                 'status' => 'success',
                 'message' => $message,
-                'attachments_sent' => $attachmentInfo
+                'sent_to' => $to,
+                'attachments_sent' => count($attachmentInfo),
+                'attachment_details' => $attachmentInfo
             ];
 
         } catch (TransportExceptionInterface $e) {
+            // ... (Fehlerbehandlung bleibt gleich)
             $this->logger->error('Failed to send email (Transport error)', [
                 'error' => $e->getMessage(), 
                 'userId' => $userId
@@ -137,6 +145,7 @@ final class SendMailTool
                 'message' => 'Fehler beim Senden der E-Mail (Transportfehler): ' . $e->getMessage()
             ];
         } catch (\Exception $e) {
+            // ... (Fehlerbehandlung bleibt gleich)
             $this->logger->error('Failed to send email (General error)', [
                 'error' => $e->getMessage(), 
                 'userId' => $userId,
@@ -148,14 +157,56 @@ final class SendMailTool
             ];
         }
     }
+    
+    /**
+     * Bereitet die E-Mail-Details (ohne User/SMTP-Check) vor.
+     * Kann auch von der WorkflowExecutor::prepareSendMailDetails verwendet werden.
+     */
+    public function getPreparedEmailDetails(string $to, string $subject, string $body, string $attachmentsJson, ?User $user): array
+    {
+        // 1. E-Mail erstellen (ohne Absender, da dieser erst beim Senden bekannt ist)
+        $formattedBody = nl2br(htmlspecialchars($body, ENT_QUOTES, 'UTF-8'));
+
+        $email = (new Email())
+            ->to(...explode(',', str_replace(' ', '', $to)))
+            ->subject($subject)
+            ->html($formattedBody);
+
+        // 2. Anhänge verarbeiten (NUR wenn vorhanden)
+        $attachmentInfo = [];
+        if (!empty(trim($attachmentsJson))) {
+            // ACHTUNG: processAttachments benötigt den User, um Dokumente zu laden!
+            // Wenn $user null ist, werden hier keine Anhänge geladen.
+            if ($user) {
+                 $attachmentInfo = $this->processAttachments($email, $attachmentsJson, $user);
+            } else {
+                 // Debugging-Hinweis, wenn Anhänge angegeben sind, aber der User fehlt
+                 $this->logger->debug('Cannot process attachments during preparation because user context is missing.');
+                 // Wir müssen hier die Roh-Attachment-Daten zurückgeben, damit der User sie im Frontend sieht.
+                 // Dies ist ein Workaround, da processAttachments File-Objekte zum Email-Objekt hinzufügt,
+                 // was in diesem Zustand schwierig ist.
+                 try {
+                    $attachmentData = json_decode($attachmentsJson, true);
+                    if (is_array($attachmentData)) {
+                       $attachmentInfo = array_map(function($a) {
+                           return ['type' => $a['type'] ?? 'document_id', 'value' => (string)$a['value']];
+                       }, $attachmentData);
+                    }
+                 } catch (\Exception $e) { /* ignore json parse error */ }
+
+            }
+        }
+        
+        // Da die Anhänge direkt zum $email Objekt hinzugefügt werden,
+        // geben wir das Email-Objekt selbst und die Metadaten zurück.
+        return [
+            'email' => $email,
+            'attachments' => $attachmentInfo,
+        ];
+    }
 
     /**
-     * Verarbeitet Anhänge und fügt sie der E-Mail hinzu
-     * 
-     * @param Email $email Das E-Mail-Objekt
-     * @param string $attachmentsJson JSON-String mit Anhang-Informationen
-     * @param User $user Der aktuelle Benutzer
-     * @return array Array mit Informationen über verarbeitete Anhänge
+     * Verarbeitet Anhänge - Unterstützt verschiedene Formate
      */
     private function processAttachments(Email $email, string $attachmentsJson, User $user): array
     {
@@ -166,13 +217,23 @@ final class SendMailTool
             $attachments = json_decode($attachmentsJson, true);
             
             if (json_last_error() !== JSON_ERROR_NONE) {
-                // Fallback: Behandle als einfachen Dateipfad
-                $attachments = [['type' => 'path', 'value' => $attachmentsJson]];
+                // Fallback 1: Komma-separierte IDs
+                if (str_contains($attachmentsJson, ',')) {
+                    $attachments = array_map('trim', explode(',', $attachmentsJson));
+                } else {
+                    // Fallback 2: Einzelner Wert
+                    $attachments = [$attachmentsJson];
+                }
             }
 
             if (!is_array($attachments)) {
                 $attachments = [$attachments];
             }
+
+            $this->logger->debug('Processing attachments', [
+                'count' => count($attachments),
+                'raw' => $attachmentsJson
+            ]);
 
             foreach ($attachments as $attachment) {
                 $attachmentResult = $this->addAttachment($email, $attachment, $user);
@@ -192,35 +253,50 @@ final class SendMailTool
     }
 
     /**
-     * Fügt einen einzelnen Anhang zur E-Mail hinzu
-     * 
-     * @param Email $email Das E-Mail-Objekt
-     * @param mixed $attachment Anhang-Information (Array oder String)
-     * @param User $user Der aktuelle Benutzer
-     * @return array|null Informationen über den hinzugefügten Anhang
+     * Fügt einen einzelnen Anhang hinzu - Erkennt automatisch das Format
      */
     private function addAttachment(Email $email, mixed $attachment, User $user): ?array
     {
         try {
-            // Normalisiere Attachment-Format
+            // Normalisiere zu Array-Format
             if (is_string($attachment)) {
-                $attachment = ['type' => 'path', 'value' => $attachment];
+                // Prüfe ob es eine reine Zahl ist (document_id)
+                if (is_numeric($attachment)) {
+                    $attachment = ['type' => 'document_id', 'value' => $attachment];
+                } 
+                // Prüfe ob es ein Dateipfad ist (enthält / oder \)
+                elseif (str_contains($attachment, '/') || str_contains($attachment, '\\')) {
+                    $attachment = ['type' => 'path', 'value' => $attachment];
+                }
+                // Default: behandle als document_id
+                else {
+                    $attachment = ['type' => 'document_id', 'value' => $attachment];
+                }
             }
 
-            $type = $attachment['type'] ?? 'path';
+            $type = $attachment['type'] ?? 'document_id';
             $value = $attachment['value'] ?? '';
 
             if (empty($value)) {
+                $this->logger->debug('Empty attachment value, skipping');
                 return null;
             }
+
+            $this->logger->debug('Adding attachment', [
+                'type' => $type,
+                'value' => $value
+            ]);
 
             switch ($type) {
                 case 'document_id':
                     return $this->attachDocumentById($email, $value, $user);
                 
                 case 'path':
-                default:
                     return $this->attachFilePath($email, $value);
+                
+                default:
+                    $this->logger->warning('Unknown attachment type', ['type' => $type]);
+                    return null;
             }
 
         } catch (\Exception $e) {
@@ -234,11 +310,6 @@ final class SendMailTool
 
     /**
      * Fügt ein UserDocument als Anhang hinzu
-     * 
-     * @param Email $email Das E-Mail-Objekt
-     * @param string|int $documentId Die Dokument-ID
-     * @param User $user Der aktuelle Benutzer
-     * @return array|null Informationen über den Anhang
      */
     private function attachDocumentById(Email $email, string|int $documentId, User $user): ?array
     {
@@ -261,6 +332,11 @@ final class SendMailTool
 
         $email->attachFromPath($fullPath, $doc->getOriginalFilename(), $doc->getMimeType());
 
+        $this->logger->info('Document attached successfully', [
+            'document_id' => $doc->getId(),
+            'filename' => $doc->getOriginalFilename()
+        ]);
+
         return [
             'type' => 'document',
             'document_id' => $doc->getId(),
@@ -271,10 +347,6 @@ final class SendMailTool
 
     /**
      * Fügt eine Datei per Pfad als Anhang hinzu
-     * 
-     * @param Email $email Das E-Mail-Objekt
-     * @param string $filePath Der Dateipfad (relativ oder absolut)
-     * @return array|null Informationen über den Anhang
      */
     private function attachFilePath(Email $email, string $filePath): ?array
     {
@@ -295,6 +367,11 @@ final class SendMailTool
 
         $filename = basename($filePath);
         $email->attachFromPath($filePath, $filename);
+
+        $this->logger->info('File attached successfully', [
+            'filename' => $filename,
+            'path' => $filePath
+        ]);
 
         return [
             'type' => 'file',

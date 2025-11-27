@@ -60,7 +60,8 @@ final class UserDocumentListTool
                 'category' => $doc->getCategory(),
                 'size' => $doc->getFileSize(),
                 'tags' => $doc->getTags(),
-                'uploaded_at' => $doc->getCreatedAt()->format('Y-m-d H:i:s')
+                'uploaded_at' => $doc->getCreatedAt()->format('Y-m-d H:i:s'),
+                'storage_path' => $doc->getStoragePath(),
             ], $documents)
         ];
     }

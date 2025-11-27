@@ -408,4 +408,127 @@ class UserDocumentService
         
         return round($bytes, 2) . ' ' . $units[$i];
     }
+    /**
+     * Lädt eine bereits generierte Datei hoch (z.B. von PdfGenerator)
+     * Unterscheidet sich von upload() dadurch, dass die Datei bereits existiert
+     * und nicht von einem UploadedFile-Objekt kommt
+     */
+    public function uploadGeneratedFile(
+        User $user,
+        \Symfony\Component\HttpFoundation\File\File $file,
+        string $originalFilename,
+        string $mimeType,
+        string $category = UserDocument::CATEGORY_GENERATED,
+        ?string $displayName = null,
+        ?string $description = null,
+        ?array $tags = null
+    ): UserDocument {
+        $this->logger->info('Starting generated file upload', [
+            'userId' => $user->getId(),
+            'filename' => $originalFilename,
+            'category' => $category
+        ]);
+
+        // Dateigröße validieren
+        $fileSize = $file->getSize();
+        
+        if ($fileSize > self::MAX_FILE_SIZE) {
+            throw new BadRequestHttpException(
+                sprintf('Datei zu groß. Maximum: %s', $this->formatBytes(self::MAX_FILE_SIZE))
+            );
+        }
+
+        // Speicherlimit prüfen
+        $this->validateUserStorage($user, $fileSize);
+
+        // Checksum berechnen
+        $checksum = hash_file('sha256', $file->getPathname());
+
+        // Duplikat-Check (optional überspringen für generierte Dateien)
+        $existingDoc = $this->documentRepo->findByUserAndChecksum($user, $checksum);
+        if ($existingDoc) {
+            $this->logger->info('Document with same checksum exists, creating new version', [
+                'existing_id' => $existingDoc->getId()
+            ]);
+            // Bei generierten Dateien erlauben wir Duplikate (verschiedene Versionen)
+        }
+
+        // Bestimme Dokumenttyp
+        $typeInfo = self::ALLOWED_TYPES[$mimeType] ?? ['unknown', UserDocument::TYPE_OTHER];
+        $documentType = $typeInfo[1];
+
+        // Generiere sicheren Dateinamen
+        $storedFilename = $this->generateSecureFilenameFromOriginal($originalFilename, $user);
+        
+        // User-spezifisches Verzeichnis für generierte Dateien
+        $userDir = $this->getGeneratedFilesDirectory($user);
+        $this->ensureDirectory($userDir);
+
+        // Kopiere Datei in finales Verzeichnis
+        $targetPath = $userDir . '/' . $storedFilename;
+        $this->filesystem->copy($file->getPathname(), $targetPath);
+
+        // Erstelle Entity
+        $doc = new UserDocument();
+        $doc->setUser($user);
+        $doc->setOriginalFilename($originalFilename);
+        $doc->setStoredFilename($storedFilename);
+        $doc->setMimeType($mimeType);
+        $doc->setDocumentType($documentType);
+        $doc->setFileSize($fileSize);
+        $doc->setChecksum($checksum);
+        $doc->setStoragePath($userDir);
+        $doc->setCategory($category);
+        $doc->setDisplayName($displayName ?? pathinfo($originalFilename, PATHINFO_FILENAME));
+        $doc->setDescription($description);
+        $doc->setTags($tags);
+
+        // Extrahiere Metadaten
+        $metadata = $this->extractMetadata($targetPath, $mimeType, $documentType);
+        $doc->setMetadata($metadata);
+
+        // Extrahiere Text (falls möglich)
+        $extractedText = $this->extractText($targetPath, $mimeType, $documentType);
+        if ($extractedText) {
+            $doc->setExtractedText($extractedText);
+        }
+
+        $this->em->persist($doc);
+        $this->em->flush();
+
+        $this->logger->info('Generated file uploaded successfully', [
+            'documentId' => $doc->getId(),
+            'userId' => $user->getId(),
+            'path' => $targetPath
+        ]);
+
+        return $doc;
+    }
+
+    /**
+     * Gibt das Verzeichnis für generierte Dateien zurück
+     * Pfad: /var/uploads/user_123/generated/
+     */
+    private function getGeneratedFilesDirectory(User $user): string
+    {
+        return $this->uploadDirectory . '/user_' . $user->getId() . '/generated';
+    }
+
+    /**
+     * Generiert sicheren Dateinamen aus Original-Namen
+     */
+    private function generateSecureFilenameFromOriginal(string $originalFilename, User $user): string
+    {
+        $extension = pathinfo($originalFilename, PATHINFO_EXTENSION);
+        $basename = pathinfo($originalFilename, PATHINFO_FILENAME);
+        
+        // Bereinige Basename (entferne Sonderzeichen)
+        $safeBasename = preg_replace('/[^a-zA-Z0-9_-]/', '_', $basename);
+        $safeBasename = substr($safeBasename, 0, 100); // Maximal 100 Zeichen
+        
+        $timestamp = (new \DateTime())->format('YmdHis');
+        $random = bin2hex(random_bytes(4));
+        
+        return sprintf('%s_%s_%s.%s', $safeBasename, $timestamp, $random, $extension);
+    }
 }

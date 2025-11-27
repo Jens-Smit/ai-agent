@@ -9,11 +9,12 @@ use App\Entity\User;
 use App\Entity\UserDocument;
 use App\Entity\WorkflowStep;
 use App\Repository\WorkflowRepository;
-use App\Service\AgentStatusService;
 use App\Service\ToolCapabilityChecker;
 use App\Service\WorkflowEngine;
 use App\Service\Workflow\WorkflowExecutor;
+use App\Service\Workflow\WorkflowPlanner;
 use Doctrine\ORM\EntityManagerInterface;
+use FontLib\Table\Type\prep;
 use OpenApi\Attributes as OA;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -29,128 +30,97 @@ class WorkflowController extends AbstractController
 {
     public function __construct(
         private WorkflowEngine $workflowEngine,
-        private WorkflowExecutor $workflowExecutor,
         private WorkflowRepository $workflowRepo,
-        private ToolCapabilityChecker $capabilityChecker,
-        private AgentStatusService $statusService,
-        private LoggerInterface $logger,
+        private WorkflowPlanner $workflowPlanner,
         private EntityManagerInterface $em,
+        private LoggerInterface $logger,
+        private WorkflowExecutor $workflowExecutor,
+        private ToolCapabilityChecker $capabilityChecker,
     ) {}
 
     /**
-     * Erstellt und startet einen neuen Workflow
+     * ✅ Erstellt einen Workflow-ENTWURF (nicht ausgeführt)
      */
     #[Route('/create', name: 'create', methods: ['POST'])]
     #[OA\Post(
-        summary: 'Erstellt Workflow aus User-Intent',
-        description: 'Der Personal Assistant analysiert den Intent, prüft Tool-Verfügbarkeit, plant den Workflow und startet die Ausführung.',
+        summary: 'Erstellt Workflow-Entwurf',
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\JsonContent(
                 required: ['intent', 'sessionId'],
                 properties: [
-                    new OA\Property(property: 'intent', type: 'string', example: 'Such mir eine Wohnung in Berlin Mitte für 1500€'),
-                    new OA\Property(property: 'sessionId', type: 'string', example: '01234567-89ab-cdef-0123-456789abcdef')
+                    new OA\Property(property: 'intent', type: 'string'),
+                    new OA\Property(property: 'sessionId', type: 'string'),
+                    new OA\Property(property: 'requiresApproval', type: 'boolean', default: true),
+                    new OA\Property(property: 'saveAsTemplate', type: 'boolean', default: false),
+                    new OA\Property(property: 'templateName', type: 'string')
                 ]
             )
-        ),
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: 'Workflow erstellt und gestartet',
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: 'status', type: 'string', example: 'created'),
-                        new OA\Property(property: 'workflow_id', type: 'integer'),
-                        new OA\Property(property: 'session_id', type: 'string'),
-                        new OA\Property(property: 'steps_count', type: 'integer'),
-                        new OA\Property(
-                            property: 'missing_tools',
-                            type: 'array',
-                            items: new OA\Items(type: 'string')
-                        )
-                    ]
-                )
-            ),
-            new OA\Response(response: 400, description: 'Ungültige Anfrage')
-        ]
+        )
     )]
     public function createWorkflow(Request $request): JsonResponse
     {
-        // 1. Daten und User abrufen
         $data = json_decode($request->getContent(), true);
-        // Behebung des Frontend-Problems (falls noch nicht gelöst, siehe vorherige Diskussion)
-        $intent = $data['intent'] ?? $data['user_intent'] ?? null; 
+        $intent = $data['intent'] ?? $data['user_intent'] ?? null;
         $sessionId = $data['sessionId'] ?? $data['session_id'] ?? null;
-        
-        // Den aktuellen authentifizierten Benutzer abrufen
-        // Dies funktioniert nur, wenn der Controller von Symfony korrekt eingerichtet wurde (z.B. durch Extenden von AbstractController)
+        $requiresApproval = $data['requiresApproval'] ?? true;
+        $saveAsTemplate = $data['saveAsTemplate'] ?? false;
+        $templateName = $data['templateName'] ?? null;
+
         /** @var User $user */
-        $user = $this->getUser(); 
-        
-        // Zusätzliche Prüfung auf den User (falls das Security-Attribut IsGranted fehlt)
+        $user = $this->getUser();
+
         if (!$user) {
-            return $this->json([
-                'error' => 'Authentication required',
-                'message' => 'User must be logged in to create a workflow.'
-            ], Response::HTTP_UNAUTHORIZED);
+            return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
         }
 
-        if (!$intent || !$sessionId) {
-            return $this->json([
-                'error' => 'Intent and sessionId are required'
-            ], Response::HTTP_BAD_REQUEST);
+        if (!$sessionId) {
+        // Generiere eine zufällige, eindeutige ID (z.B. UUID oder uniqid)
+        $sessionId = uniqid('wf_', true); 
         }
-        
-        // 2. Logging und Status
-        $this->logger->info('Creating workflow from intent', [
-            'session' => $sessionId,
-            'intent' => substr($intent, 0, 100),
-            'user_id' => $user->getId(), // Logge die User ID
-        ]);
 
+        if (!$intent) {
+        // Nur Intent ist jetzt ZWINGEND erforderlich
+        return $this->json(['error' => 'Intent is required'], Response::HTTP_BAD_REQUEST);
+        }
         try {
-            $this->statusService->addStatus($sessionId, '🤖 KI analysiert Intent und Tool-Landschaft...');
+            // Erstelle Workflow-ENTWURF (nicht ausgeführt)
+            $workflow = $this->workflowPlanner->createWorkflowFromIntent($intent, $sessionId);
 
-            // ... (Capability Checker Logik bleibt gleich)
-            $capabilityResult = $this->capabilityChecker->ensureCapabilitiesFor($intent);
-            
-            // ... (Status-Updates für Capability Checker)
+            if ($requiresApproval) {
+                $workflow->requireApproval();
+            }
 
-            // 3. Workflow erstellen
-            $this->statusService->addStatus($sessionId, '📋 Erstelle Workflow-Plan...');
-            
-            // Füge den Benutzer beim Erstellen hinzu, damit der Workflow weiß, wem er gehört
-            $workflow = $this->workflowEngine->createWorkflowFromIntent($intent, $sessionId, $user); 
+            if ($saveAsTemplate && $templateName) {
+                $workflow->saveAsTemplate($templateName);
+            }
 
-            // 4. Starte Workflow
-            $this->statusService->addStatus($sessionId, '🚀 Starte Workflow-Ausführung...');
-            
-            // 🚨 WICHTIG: ÜBERGABE DES BENUTZERS AN DEN EXECUTOR
-            // Dies entspricht der Korrektur, die im WorkflowExecutor erforderlich ist.
-            $this->workflowEngine->executeWorkflow($workflow, $user); 
-
-            // 5. Erfolgreiche Antwort
+            $this->em->flush();
+            return $this->json(
+                $workflow,
+                Response::HTTP_CREATED,
+                [],
+                // 💡 WICHTIG: Serialsierungsgruppen hier anwenden
+                ['groups' => ['workflow:read']] 
+            );
+            /*alt
             return $this->json([
                 'status' => 'created',
                 'workflow_id' => $workflow->getId(),
                 'session_id' => $sessionId,
+                'workflow_status' => $workflow->getStatus(),
                 'steps_count' => $workflow->getSteps()->count(),
-                'missing_tools' => [],
-                'message' => 'Workflow erstellt und wird ausgeführt.'
+                'requires_approval' => $workflow->requireApproval(),
+                'is_template' => $workflow->isTemplate(),
+                'message' => 'Workflow-Entwurf erstellt. Rufe /approve auf um zu starten.'
             ]);
+            */
 
         } catch (\Exception $e) {
-            // ... (Error Handling Logik bleibt gleich)
             $this->logger->error('Workflow creation failed', [
                 'session' => $sessionId,
                 'error' => $e->getMessage()
             ]);
-            
-            $this->statusService->addStatus(
-                $sessionId,
-                sprintf('❌ Fehler: %s', $e->getMessage())
-            );
 
             return $this->json([
                 'error' => 'Workflow creation failed',
@@ -158,70 +128,390 @@ class WorkflowController extends AbstractController
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
+
     /**
-     * Löscht einen Workflow anhand seiner ID
+     * ✅ Genehmigt und STARTET Workflow
+     */
+    #[Route('/{workflowId}/approve', name: 'approve', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Genehmigt und startet Workflow',
+        parameters: [
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
+        ]
+    )]
+    public function approveWorkflow(int $workflowId): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        try {
+            $workflow->approve($user->getId());
+            $this->em->flush();
+
+            // Starte Workflow JETZT
+            $this->workflowEngine->executeWorkflow($workflow, $user);
+
+            return $this->json([
+                'status' => 'approved',
+                'workflow_id' => $workflow->getId(),
+                'message' => 'Workflow genehmigt und gestartet'
+            ]);
+
+        } catch (\Exception $e) {
+            return $this->json([
+                'error' => 'Approval failed',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * ✅ Führt Workflow ERNEUT aus (Replay)
+     */
+    #[Route('/{workflowId}/execute', name: 'execute', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Führt Workflow erneut aus',
+        parameters: [
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
+        ]
+    )]
+    public function executeWorkflow(int $workflowId): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        if (!$workflow->canExecute()) {
+            return $this->json([
+                'error' => 'Workflow cannot be executed',
+                'reason' => 'Requires approval first'
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            $this->workflowEngine->executeWorkflow($workflow, $user);
+
+            return $this->json([
+                'status' => 'executing',
+                'workflow_id' => $workflow->getId(),
+                'execution_count' => $workflow->getExecutionCount()
+            ]);
+
+        } catch (\Exception $e) {
+            return $this->json([
+                'error' => 'Execution failed',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * ✅ Konfiguriert Workflow-Schedule
+     */
+    #[Route('/{workflowId}/schedule', name: 'schedule', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Konfiguriert Workflow-Zeitplan',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(
+                properties: [
+                    new OA\Property(property: 'type', type: 'string', enum: ['once', 'hourly', 'daily', 'weekly', 'biweekly', 'monthly']),
+                    new OA\Property(property: 'config', type: 'object')
+                ]
+            )
+        )
+    )]
+    public function scheduleWorkflow(int $workflowId, Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $data = json_decode($request->getContent(), true);
+        $type = $data['type'] ?? null;
+        $config = $data['config'] ?? [];
+
+        try {
+            match($type) {
+                'once' => $workflow->scheduleOnce(new \DateTimeImmutable($config['run_at'])),
+                'hourly' => $workflow->scheduleHourly($config['minute'] ?? 0),
+                'daily' => $workflow->scheduleDaily($config['time'] ?? '12:00'),
+                'weekly' => $workflow->scheduleWeekly($config['day_of_week'], $config['time'] ?? '12:00'),
+                'biweekly' => $workflow->scheduleBiweekly($config['day_of_week'], $config['time'] ?? '12:00'),
+                'monthly' => $workflow->scheduleMonthly($config['day_of_month'], $config['time'] ?? '12:00'),
+                default => throw new \InvalidArgumentException("Invalid schedule type: $type")
+            };
+
+            $this->em->flush();
+
+            return $this->json([
+                'status' => 'scheduled',
+                'workflow_id' => $workflow->getId(),
+                'schedule_type' => $workflow->getScheduleType(),
+                'next_run_at' => $workflow->getNextRunAt()?->format('c')
+            ]);
+
+        } catch (\Exception $e) {
+            return $this->json([
+                'error' => 'Scheduling failed',
+                'message' => $e->getMessage()
+            ], Response::HTTP_BAD_REQUEST);
+        }
+    }
+
+    /**
+     * ✅ Beantwortet User-Interaction
+     */
+    #[Route('/{workflowId}/resolve-interaction', name: 'resolve_interaction', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Beantwortet User-Interaction',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(
+                properties: [
+                    new OA\Property(property: 'resolution', type: 'object')
+                ]
+            )
+        )
+    )]
+    public function resolveUserInteraction(int $workflowId, Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        if (!$workflow->hasUserInteraction()) {
+            return $this->json([
+                'error' => 'Workflow is not waiting for user input'
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $data = json_decode($request->getContent(), true);
+        $resolution = $data['resolution'] ?? [];
+
+        try {
+            $workflow->resolveUserInteraction($resolution);
+            $this->em->flush();
+
+            // Setze Workflow fort
+            $this->workflowEngine->executeWorkflow($workflow, $user);
+
+            return $this->json([
+                'status' => 'resolved',
+                'workflow_id' => $workflow->getId(),
+                'message' => 'User interaction resolved, workflow continuing'
+            ]);
+
+        } catch (\Exception $e) {
+            return $this->json([
+                'error' => 'Resolution failed',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+    /**
+     * ✅ Listet User-Workflows
+     */
+    #[Route('/list', name: 'list', methods: ['GET'])]
+    public function listWorkflows(Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+
+        $status = $request->query->get('status');
+        $limit = (int) ($request->query->get('limit') ?? 20);
+        $criteria = ['user' => $user];
+
+        if ($status) {
+            $criteria['status'] = $status;
+        }
+
+        $workflows = $this->workflowRepo->findBy(
+            $criteria,
+            ['createdAt' => 'DESC'],
+            $limit
+        );
+
+        $result = array_map(fn($w) => [
+            'id' => $w->getId(),
+            'session_id' => $w->getSessionId(),
+            'user_intent' => substr($w->getUserIntent(), 0, 100),
+            'status' => $w->getStatus(),
+            'steps_count' => $w->getSteps()->count(),
+            'current_step' => $w->getCurrentStep(),
+            'execution_count' => $w->getExecutionCount(),
+            'is_scheduled' => $w->isScheduled(),
+            'next_run_at' => $w->getNextRunAt()?->format('c'),
+            'created_at' => $w->getCreatedAt()->format('c'),
+            'completed_at' => $w->getCompletedAt()?->format('c')
+        ], $workflows);
+
+        return $this->json(['workflows' => $result, 'count' => count($result)]);
+    }
+    /**
+     * ✅ Holt Workflow-Details
+     */
+    #[Route('/{workflowId}', name: 'get', methods: ['GET'])]
+    public function getWorkflow(int $workflowId): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        return $this->json([
+            'id' => $workflow->getId(),
+            'status' => $workflow->getStatus(),
+            'user_intent' => $workflow->getUserIntent(),
+            'requires_approval' => $workflow->isRequiresApproval(),
+            'is_approved' => $workflow->isApproved(),
+            'is_scheduled' => $workflow->isScheduled(),
+            'schedule_type' => $workflow->getScheduleType(),
+            'next_run_at' => $workflow->getNextRunAt()?->format('c'),
+            'execution_count' => $workflow->getExecutionCount(),
+            'has_user_interaction' => $workflow->hasUserInteraction(),
+            'user_interaction_message' => $workflow->getUserInteractionMessage(),
+            'steps_count' => $workflow->getSteps()->count(),
+            'created_at' => $workflow->getCreatedAt()->format('c')
+        ]);
+    }
+
+    
+
+    /**
+     * Löscht einen Workflow
      */
     #[Route('/{workflowId}', name: 'delete', methods: ['DELETE'])]
     #[OA\Delete(
         summary: 'Löscht einen Workflow',
         parameters: [
-            new OA\Parameter(name: 'workflowId', in: 'path', required: true, description: 'ID des zu löschenden Workflows', schema: new OA\Schema(type: 'integer'))
-        ],
-        responses: [
-            new OA\Response(
-                response: 200, 
-                description: 'Workflow erfolgreich gelöscht', 
-                content: new OA\JsonContent(properties: [
-                    new OA\Property(property: 'status', type: 'string', example: 'deleted'),
-                    new OA\Property(property: 'workflow_id', type: 'integer')
-                ])
-            ),
-            new OA\Response(response: 404, description: 'Workflow nicht gefunden')
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
         ]
     )]
     public function deleteWorkflow(int $workflowId): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
         $workflow = $this->workflowRepo->find($workflowId);
 
-        if (!$workflow) {
-            $this->logger->warning('Attempted to delete non-existent workflow', ['workflowId' => $workflowId]);
-            return $this->json([
-                'error' => 'Workflow not found',
-                'workflow_id' => $workflowId
-            ], Response::HTTP_NOT_FOUND);
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
         }
 
         try {
-            // Löschen des Workflows
             $this->em->remove($workflow);
             $this->em->flush();
 
-            $this->logger->info('Workflow successfully deleted', ['workflowId' => $workflowId, 'sessionId' => $workflow->getSessionId()]);
+            $this->logger->info('Workflow deleted', ['workflow_id' => $workflowId]);
 
             return $this->json([
                 'status' => 'deleted',
                 'workflow_id' => $workflowId,
-                'message' => sprintf('Workflow mit ID %d erfolgreich gelöscht.', $workflowId)
-            ], Response::HTTP_OK);
+                'message' => 'Workflow erfolgreich gelöscht'
+            ]);
 
         } catch (\Exception $e) {
-            $this->logger->error('Failed to delete workflow', ['workflowId' => $workflowId, 'error' => $e->getMessage()]);
+            $this->logger->error('Failed to delete workflow', [
+                'workflow_id' => $workflowId,
+                'error' => $e->getMessage()
+            ]);
+
             return $this->json([
                 'error' => 'Failed to delete workflow',
                 'message' => $e->getMessage()
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
-    #[Route('/status/{sessionId}', name: 'status', methods: ['GET'])]
+
+    /**
+     * Bestätigt/Lehnt wartenden Step ab
+     */
+    #[Route('/confirm/{workflowId}', name: 'confirm', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Bestätigt oder lehnt wartenden Step ab',
+        parameters: [
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
+        ],
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(
+                properties: [
+                    new OA\Property(property: 'confirmed', type: 'boolean')
+                ]
+            )
+        )
+    )]
+    public function confirmStep(int $workflowId, Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        if ($workflow->getStatus() !== 'waiting_confirmation') {
+            return $this->json([
+                'error' => 'Workflow is not waiting for confirmation',
+                'current_status' => $workflow->getStatus()
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $data = json_decode($request->getContent(), true);
+        $confirmed = $data['confirmed'] ?? null;
+
+        if ($confirmed === null) {
+            return $this->json(['error' => 'confirmed parameter is required'], Response::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            $this->workflowEngine->confirmStep($workflow, (bool) $confirmed);
+
+            return $this->json([
+                'status' => 'success',
+                'confirmed' => (bool) $confirmed,
+                'workflow_status' => $workflow->getStatus()
+            ]);
+
+        } catch (\Exception $e) {
+            return $this->json([
+                'error' => 'Confirmation failed',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Holt Workflow-Status mit E-Mail-Details
+     */
+    #[Route('/status/{workflowId}', name: 'status', methods: ['GET'])]
     #[OA\Get(
         summary: 'Holt Workflow-Status mit E-Mail-Details',
         parameters: [
-            new OA\Parameter(name: 'sessionId', in: 'path', required: true, schema: new OA\Schema(type: 'string'))
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
         ]
     )]
-    public function getStatus(string $sessionId): JsonResponse
+    public function getStatus(string $workflowId): JsonResponse
     {
-        $workflow = $this->workflowRepo->findBySessionId($sessionId);
+        $workflow = $this->workflowRepo->find($workflowId);
 
         if (!$workflow) {
             return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
@@ -239,7 +529,6 @@ class WorkflowController extends AbstractController
                 'error' => $step->getErrorMessage()
             ];
 
-            // Füge E-Mail-Details hinzu, wenn vorhanden
             if ($step->getEmailDetails()) {
                 $stepData['email_details'] = $step->getEmailDetails();
             }
@@ -260,243 +549,34 @@ class WorkflowController extends AbstractController
     }
 
     /**
-     * Holt den vollständigen E-Mail-Body eines Steps
-     */
-    #[Route('/step/{stepId}/email-body', name: 'step_email_body', methods: ['GET'])]
-    #[OA\Get(
-        summary: 'Holt den vollständigen E-Mail-Body eines Steps',
-        parameters: [
-            new OA\Parameter(name: 'stepId', in: 'path', required: true, schema: new OA\Schema(type: 'integer'))
-        ]
-    )]
-    public function getStepEmailBody(int $stepId): JsonResponse
-    {
-        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
-
-        if (!$step) {
-            return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
-        }
-
-        $emailDetails = $step->getEmailDetails();
-        if (!$emailDetails) {
-            return $this->json(['error' => 'No email details available'], Response::HTTP_NOT_FOUND);
-        }
-
-        return $this->json([
-            'step_id' => $stepId,
-            'recipient' => $emailDetails['recipient'],
-            'subject' => $emailDetails['subject'],
-            'body' => $emailDetails['body'],
-            'body_html' => $this->formatEmailBodyAsHtml($emailDetails['body']),
-            'attachments' => $emailDetails['attachments']
-        ]);
-    }
-
-    /**
-     * Holt einen E-Mail-Anhang zur Vorschau
-     */
-    #[Route('/step/{stepId}/attachment/{attachmentId}/preview', name: 'step_attachment_preview', methods: ['GET'])]
-    #[OA\Get(
-        summary: 'Zeigt einen E-Mail-Anhang zur Vorschau',
-        parameters: [
-            new OA\Parameter(name: 'stepId', in: 'path', required: true),
-            new OA\Parameter(name: 'attachmentId', in: 'path', required: true)
-        ]
-    )]
-    public function previewAttachment(int $stepId, int $attachmentId): Response
-    {
-        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
-        if (!$step) {
-            throw $this->createNotFoundException('Step not found');
-        }
-
-        $document = $this->em->getRepository(UserDocument::class)->find($attachmentId);
-        if (!$document) {
-            throw $this->createNotFoundException('Document not found');
-        }
-
-        // Sicherheitsprüfung: Gehört das Dokument zum User des Workflows?
-        $workflow = $step->getWorkflow();
-        // Hier müsste man den User aus dem Workflow ermitteln (könnte ergänzt werden)
-
-        $filePath = $document->getFullPath();
-        if (!file_exists($filePath)) {
-            throw $this->createNotFoundException('File not found');
-        }
-
-        return new BinaryFileResponse($filePath);
-    }
-
-    private function formatEmailBodyAsHtml(string $body): string
-    {
-        // Konvertiere Plain Text zu HTML für bessere Darstellung
-        return nl2br(htmlspecialchars($body, ENT_QUOTES, 'UTF-8'));
-    }
-
-    /**
-     * Bestätigt/Lehnt einen wartenden Workflow-Step ab
-     */
-    #[Route('/confirm/{workflowId}', name: 'confirm', methods: ['POST'])]
-    #[OA\Post(
-        summary: 'Bestätigt oder lehnt einen wartenden Step ab',
-        parameters: [new OA\Parameter(name: 'workflowId', in: 'path', required: true, schema: new OA\Schema(type: 'integer'))],
-        requestBody: new OA\RequestBody(required: true, content: new OA\JsonContent(properties: [new OA\Property(property: 'confirmed', type: 'boolean')])),
-        responses: [new OA\Response(response: 200, description: 'OK')]
-    )]
-    public function confirmStep(int $workflowId, Request $request): JsonResponse
-    {
-        $workflow = $this->workflowRepo->find($workflowId);
-
-        if (!$workflow) {
-            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
-        }
-
-        if ($workflow->getStatus() !== 'waiting_confirmation') {
-            return $this->json([
-                'error' => 'Workflow is not waiting for confirmation',
-                'current_status' => $workflow->getStatus()
-            ], Response::HTTP_BAD_REQUEST);
-        }
-
-        $data = json_decode($request->getContent(), true);
-        $confirmed = $data['confirmed'] ?? null;
-
-        if ($confirmed === null) {
-            return $this->json(['error' => 'confirmed parameter is required'], Response::HTTP_BAD_REQUEST);
-        }
-
-        try {
-            $this->workflowEngine->confirmStep($workflow, (bool) $confirmed);
-            return $this->json([
-                'status' => 'success',
-                'confirmed' => (bool) $confirmed,
-                'workflow_status' => $workflow->getStatus()
-            ]);
-        } catch (\Exception $e) {
-            return $this->json(['error' => 'Confirmation failed', 'message' => $e->getMessage()], Response::HTTP_INTERNAL_SERVER_ERROR);
-        }
-    }
-
-    /**
-     * Listet alle Workflows auf
-     */
-    #[Route('/list', name: 'list', methods: ['GET'])]
-    #[OA\Get(summary: 'Listet Workflows auf', responses: [new OA\Response(response: 200, description: 'Liste')]) ]
-    public function listWorkflows(Request $request): JsonResponse
-    {
-        $status = $request->query->get('status');
-        $limit = (int) ($request->query->get('limit') ?? 20);
-        $criteria = $status ? ['status' => $status] : [];
-        
-        $workflows = $this->workflowRepo->findBy($criteria, ['createdAt' => 'DESC'], $limit);
-
-        $result = array_map(function($workflow) {
-            return [
-                'id' => $workflow->getId(),
-                'session_id' => $workflow->getSessionId(),
-                'user_intent' => substr($workflow->getUserIntent(), 0, 100),
-                'status' => $workflow->getStatus(),
-                'steps_count' => $workflow->getSteps()->count(),
-                'current_step' => $workflow->getCurrentStep(),
-                'created_at' => $workflow->getCreatedAt()->format('c'),
-                'completed_at' => $workflow->getCompletedAt()?->format('c')
-            ];
-        }, $workflows);
-
-        return $this->json(['workflows' => $result, 'count' => count($result)]);
-    }
-
-    /**
-     * Gibt verfügbare Tools und Capabilities zurück
-     * HINWEIS: Da Tools nun dynamisch sind, ist dieses statische Mapping 
-     * nur noch eine Näherung für das Frontend.
-     */
-    #[Route('/capabilities', name: 'capabilities', methods: ['GET'])]
-    #[OA\Get(summary: 'Listet verfügbare Tools und Capabilities')]
-    public function getCapabilities(): JsonResponse
-    {
-        // HINWEIS: Stelle sicher, dass ToolCapabilityChecker eine Methode getAvailableTools() hat,
-        // die ein einfaches Array von Strings (Tool-Namen) zurückgibt.
-        // Falls im Refactoring gelöscht, bitte dort wieder hinzufügen:
-        // public function getAvailableTools(): array { return array_column($this->availableToolDefinitions, 'name'); }
-        
-        $tools = [];
-        if (method_exists($this->capabilityChecker, 'getAvailableTools')) {
-            $tools = $this->capabilityChecker->getAvailableTools();
-        } elseif (method_exists($this->capabilityChecker, 'getAvailableToolDefinitions')) {
-             // Fallback, falls du Getter geändert hast
-             $defs = $this->capabilityChecker->getAvailableToolDefinitions();
-             $tools = array_column($defs, 'name');
-        }
-
-        return $this->json([
-            'tools' => $tools,
-            'tools_count' => count($tools),
-            // Mapping für das Frontend beibehalten (Legacy-Support)
-            'capabilities' => [
-                'apartment_search' => $this->hasToolLike($tools, ['immobilien', 'search', 'apartment']),
-                'calendar_management' => $this->hasToolLike($tools, ['calendar', 'termin', 'schedule']),
-                'email_sending' => $this->hasToolLike($tools, ['mail', 'send']),
-                'web_scraping' => $this->hasToolLike($tools, ['scrape', 'crawl']),
-                'pdf_generation' => $this->hasToolLike($tools, ['pdf']),
-                'api_calling' => $this->hasToolLike($tools, ['api', 'client']),
-            ]
-        ]);
-    }
-    /**
-     * ✅ NEU: Holt alle ausstehenden E-Mails eines Workflows
+     * Holt alle ausstehenden E-Mails eines Workflows
      */
     #[Route('/{workflowId}/pending-emails', name: 'pending_emails', methods: ['GET'])]
     #[OA\Get(
         summary: 'Holt alle ausstehenden E-Mails eines Workflows',
         parameters: [
-            new OA\Parameter(name: 'workflowId', in: 'path', required: true, schema: new OA\Schema(type: 'integer'))
-        ],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: 'Liste der ausstehenden E-Mails',
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: 'workflow_id', type: 'integer'),
-                        new OA\Property(property: 'workflow_status', type: 'string'),
-                        new OA\Property(
-                            property: 'pending_emails',
-                            type: 'array',
-                            items: new OA\Items(
-                                properties: [
-                                    new OA\Property(property: 'step_id', type: 'integer'),
-                                    new OA\Property(property: 'step_number', type: 'integer'),
-                                    new OA\Property(property: 'recipient', type: 'string'),
-                                    new OA\Property(property: 'subject', type: 'string'),
-                                    new OA\Property(property: 'body_preview', type: 'string'),
-                                    new OA\Property(property: 'attachment_count', type: 'integer'),
-                                    new OA\Property(property: 'created_at', type: 'string'),
-                                ]
-                            )
-                        )
-                    ]
-                )
-            )
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
         ]
     )]
     public function getPendingEmails(int $workflowId): JsonResponse
     {
+        /** @var User $user */
+        $user = $this->getUser();
         $workflow = $this->workflowRepo->find($workflowId);
 
-        if (!$workflow) {
+        if (!$workflow || $workflow->getUser() !== $user) {
             return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
         }
 
         $pendingEmails = [];
 
         foreach ($workflow->getSteps() as $step) {
-            if ($step->getStatus() === 'pending_confirmation' && 
+            if ($step->getStatus() === 'pending_confirmation' &&
                 in_array($step->getToolName(), ['send_email', 'SendMailTool']) &&
                 $step->getEmailDetails()) {
-                
+
                 $details = $step->getEmailDetails();
-                
+
                 $pendingEmails[] = [
                     'step_id' => $step->getId(),
                     'step_number' => $step->getStepNumber(),
@@ -517,15 +597,460 @@ class WorkflowController extends AbstractController
             'pending_emails' => $pendingEmails
         ]);
     }
+    /**
+     * Holt Details eines einzelnen Workflow-Steps
+     */
+    #[Route('/step/{stepId}', name: 'step_get', methods: ['GET'])]
+    #[OA\Get(
+        summary: 'Holt Details eines Workflow-Steps',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true)
+        ]
+    )]
+    public function getStep(int $stepId): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
+        if (!$step || $step->getWorkflow()->getUser() !== $user) {
+            return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        return $this->json([
+            'id' => $step->getId(),
+            'step_number' => $step->getStepNumber(),
+            'step_type' => $step->getStepType(),
+            'description' => $step->getDescription(),
+            'tool_name' => $step->getToolName(),
+            'tool_parameters' => $step->getToolParameters(),
+            'requires_confirmation' => $step->requiresConfirmation(),
+            'status' => $step->getStatus(),
+            'result' => $step->getResult(),
+            'error_message' => $step->getErrorMessage(),
+            'email_details' => $step->getEmailDetails(),
+            'expected_output_format' => $step->getExpectedOutputFormat(),
+            'completed_at' => $step->getCompletedAt()?->format('c'),
+            'workflow_id' => $step->getWorkflow()->getId()
+        ]);
+    }
 
     /**
-     * ✅ NEU: Holt vollständige E-Mail-Details eines Steps
+     * Aktualisiert einen Workflow-Step
+     */
+    #[Route('/step/{stepId}', name: 'step_update', methods: ['PATCH'])]
+    #[OA\Patch(
+        summary: 'Aktualisiert einen Workflow-Step',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true)
+        ],
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(
+                properties: [
+                    new OA\Property(property: 'description', type: 'string'),
+                    new OA\Property(property: 'tool_name', type: 'string'),
+                    new OA\Property(property: 'tool_parameters', type: 'object'),
+                    new OA\Property(property: 'requires_confirmation', type: 'boolean'),
+                    new OA\Property(property: 'expected_output_format', type: 'object')
+                ]
+            )
+        )
+    )]
+    public function updateStep(int $stepId, Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
+        if (!$step || $step->getWorkflow()->getUser() !== $user) {
+            return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $workflow = $step->getWorkflow();
+
+        // Nur Steps in draft/waiting_confirmation Status dürfen bearbeitet werden
+        if (!in_array($workflow->getStatus(), ['draft', 'waiting_confirmation', 'failed'])) {
+            return $this->json([
+                'error' => 'Cannot edit step in workflow with status: ' . $workflow->getStatus()
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $data = json_decode($request->getContent(), true);
+
+        try {
+            if (isset($data['description'])) {
+                $step->setDescription($data['description']);
+            }
+
+            if (isset($data['tool_name'])) {
+                $step->setToolName($data['tool_name']);
+            }
+
+            if (isset($data['tool_parameters'])) {
+                $step->setToolParameters($data['tool_parameters']);
+            }
+
+            if (isset($data['requires_confirmation'])) {
+                $step->setRequiresConfirmation((bool) $data['requires_confirmation']);
+            }
+
+            if (isset($data['expected_output_format'])) {
+                $step->setExpectedOutputFormat($data['expected_output_format']);
+            }
+
+            $this->em->flush();
+
+            $this->logger->info('Workflow step updated', [
+                'step_id' => $stepId,
+                'workflow_id' => $workflow->getId(),
+                'updated_by' => $user->getId()
+            ]);
+
+            return $this->json([
+                'status' => 'success',
+                'message' => 'Step successfully updated',
+                'step' => [
+                    'id' => $step->getId(),
+                    'step_number' => $step->getStepNumber(),
+                    'description' => $step->getDescription(),
+                    'tool_name' => $step->getToolName(),
+                    'tool_parameters' => $step->getToolParameters()
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to update step', [
+                'step_id' => $stepId,
+                'error' => $e->getMessage()
+            ]);
+
+            return $this->json([
+                'error' => 'Failed to update step',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Löscht einen Workflow-Step
+     */
+    #[Route('/step/{stepId}', name: 'step_delete', methods: ['DELETE'])]
+    #[OA\Delete(
+        summary: 'Löscht einen Workflow-Step',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true)
+        ]
+    )]
+    public function deleteStep(int $stepId): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
+        if (!$step || $step->getWorkflow()->getUser() !== $user) {
+            return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $workflow = $step->getWorkflow();
+
+        // Nur Steps in draft Status dürfen gelöscht werden
+        if ($workflow->getStatus() !== 'draft') {
+            return $this->json([
+                'error' => 'Cannot delete step in workflow with status: ' . $workflow->getStatus()
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        // Verhindere Löschen wenn nur noch 1 Step übrig
+        if ($workflow->getSteps()->count() <= 1) {
+            return $this->json([
+                'error' => 'Cannot delete last remaining step'
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            $stepNumber = $step->getStepNumber();
+            $workflowId = $workflow->getId();
+
+            $this->em->remove($step);
+            $this->em->flush();
+
+            // Renummeriere verbleibende Steps
+            $remainingSteps = $workflow->getSteps()->toArray();
+            usort($remainingSteps, fn($a, $b) => $a->getStepNumber() <=> $b->getStepNumber());
+
+            $newNumber = 1;
+            foreach ($remainingSteps as $s) {
+                $s->setStepNumber($newNumber++);
+            }
+
+            $this->em->flush();
+
+            $this->logger->info('Workflow step deleted', [
+                'step_id' => $stepId,
+                'step_number' => $stepNumber,
+                'workflow_id' => $workflowId
+            ]);
+
+            return $this->json([
+                'status' => 'success',
+                'message' => 'Step successfully deleted',
+                'remaining_steps' => $workflow->getSteps()->count()
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to delete step', [
+                'step_id' => $stepId,
+                'error' => $e->getMessage()
+            ]);
+
+            return $this->json([
+                'error' => 'Failed to delete step',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Fügt einen neuen Step zu einem Workflow hinzu
+     */
+    #[Route('/{workflowId}/steps', name: 'step_create', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Fügt einen neuen Step zu einem Workflow hinzu',
+        parameters: [
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
+        ],
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(
+                required: ['step_type', 'description'],
+                properties: [
+                    new OA\Property(property: 'step_type', type: 'string', enum: ['tool_call', 'analysis', 'decision', 'notification']),
+                    new OA\Property(property: 'description', type: 'string'),
+                    new OA\Property(property: 'tool_name', type: 'string'),
+                    new OA\Property(property: 'tool_parameters', type: 'object'),
+                    new OA\Property(property: 'requires_confirmation', type: 'boolean', default: false),
+                    new OA\Property(property: 'expected_output_format', type: 'object'),
+                    new OA\Property(property: 'insert_after', type: 'integer', description: 'Step number nach dem eingefügt werden soll (optional)')
+                ]
+            )
+        )
+    )]
+    public function createStep(int $workflowId, Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        // Nur in draft Status dürfen Steps hinzugefügt werden
+        if ($workflow->getStatus() !== 'draft') {
+            return $this->json([
+                'error' => 'Cannot add step to workflow with status: ' . $workflow->getStatus()
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $data = json_decode($request->getContent(), true);
+
+        if (!isset($data['step_type']) || !isset($data['description'])) {
+            return $this->json([
+                'error' => 'Missing required fields: step_type, description'
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            $step = new WorkflowStep();
+            $step->setWorkflow($workflow);
+            $step->setStepType($data['step_type']);
+            $step->setDescription($data['description']);
+            $step->setStatus('pending');
+
+            if (isset($data['tool_name'])) {
+                $step->setToolName($data['tool_name']);
+            }
+
+            if (isset($data['tool_parameters'])) {
+                $step->setToolParameters($data['tool_parameters']);
+            }
+
+            if (isset($data['requires_confirmation'])) {
+                $step->setRequiresConfirmation((bool) $data['requires_confirmation']);
+            }
+
+            if (isset($data['expected_output_format'])) {
+                $step->setExpectedOutputFormat($data['expected_output_format']);
+            }
+
+            // Bestimme Step Number
+            $insertAfter = $data['insert_after'] ?? null;
+            
+            if ($insertAfter !== null) {
+                // Verschiebe alle nachfolgenden Steps um 1
+                $stepsToMove = $workflow->getSteps()->filter(
+                    fn($s) => $s->getStepNumber() > $insertAfter
+                )->toArray();
+
+                foreach ($stepsToMove as $s) {
+                    $s->setStepNumber($s->getStepNumber() + 1);
+                }
+
+                $step->setStepNumber($insertAfter + 1);
+            } else {
+                // Füge am Ende hinzu
+                $maxStepNumber = 0;
+                foreach ($workflow->getSteps() as $s) {
+                    $maxStepNumber = max($maxStepNumber, $s->getStepNumber());
+                }
+                $step->setStepNumber($maxStepNumber + 1);
+            }
+
+            $this->em->persist($step);
+            $this->em->flush();
+
+            $this->logger->info('Workflow step created', [
+                'step_id' => $step->getId(),
+                'step_number' => $step->getStepNumber(),
+                'workflow_id' => $workflowId
+            ]);
+
+            return $this->json([
+                'status' => 'success',
+                'message' => 'Step successfully created',
+                'step' => [
+                    'id' => $step->getId(),
+                    'step_number' => $step->getStepNumber(),
+                    'step_type' => $step->getStepType(),
+                    'description' => $step->getDescription(),
+                    'tool_name' => $step->getToolName(),
+                    'status' => $step->getStatus()
+                ]
+            ], Response::HTTP_CREATED);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to create step', [
+                'workflow_id' => $workflowId,
+                'error' => $e->getMessage()
+            ]);
+
+            return $this->json([
+                'error' => 'Failed to create step',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Ändert die Reihenfolge von Workflow-Steps
+     */
+    #[Route('/{workflowId}/steps/reorder', name: 'steps_reorder', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Ändert die Reihenfolge von Workflow-Steps',
+        parameters: [
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
+        ],
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(
+                required: ['step_order'],
+                properties: [
+                    new OA\Property(
+                        property: 'step_order',
+                        type: 'array',
+                        items: new OA\Items(type: 'integer'),
+                        description: 'Array von Step-IDs in gewünschter Reihenfolge'
+                    )
+                ]
+            )
+        )
+    )]
+    public function reorderSteps(int $workflowId, Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        if ($workflow->getStatus() !== 'draft') {
+            return $this->json([
+                'error' => 'Cannot reorder steps in workflow with status: ' . $workflow->getStatus()
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $data = json_decode($request->getContent(), true);
+
+        if (!isset($data['step_order']) || !is_array($data['step_order'])) {
+            return $this->json([
+                'error' => 'Missing or invalid step_order array'
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            $stepOrder = $data['step_order'];
+            $steps = $workflow->getSteps();
+
+            // Validiere dass alle Steps vorhanden sind
+            if (count($stepOrder) !== $steps->count()) {
+                return $this->json([
+                    'error' => 'Step count mismatch'
+                ], Response::HTTP_BAD_REQUEST);
+            }
+
+            // Mappe Step-IDs zu Step-Objekten
+            $stepMap = [];
+            foreach ($steps as $step) {
+                $stepMap[$step->getId()] = $step;
+            }
+
+            // Validiere dass alle IDs gültig sind
+            foreach ($stepOrder as $stepId) {
+                if (!isset($stepMap[$stepId])) {
+                    return $this->json([
+                        'error' => 'Invalid step ID: ' . $stepId
+                    ], Response::HTTP_BAD_REQUEST);
+                }
+            }
+
+            // Setze neue Reihenfolge
+            $newNumber = 1;
+            foreach ($stepOrder as $stepId) {
+                $stepMap[$stepId]->setStepNumber($newNumber++);
+            }
+
+            $this->em->flush();
+
+            $this->logger->info('Workflow steps reordered', [
+                'workflow_id' => $workflowId,
+                'new_order' => $stepOrder
+            ]);
+
+            return $this->json([
+                'status' => 'success',
+                'message' => 'Steps successfully reordered'
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to reorder steps', [
+                'workflow_id' => $workflowId,
+                'error' => $e->getMessage()
+            ]);
+
+            return $this->json([
+                'error' => 'Failed to reorder steps',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+    /**
+     * Holt E-Mail-Details eines Steps
      */
     #[Route('/step/{stepId}/email', name: 'step_email_details', methods: ['GET'])]
     #[OA\Get(
-        summary: 'Holt vollständige E-Mail-Details eines Steps',
+        summary: 'Holt vollständige E-Mail-Details',
         parameters: [
-            new OA\Parameter(name: 'stepId', in: 'path', required: true, schema: new OA\Schema(type: 'integer'))
+            new OA\Parameter(name: 'stepId', in: 'path', required: true)
         ]
     )]
     public function getStepEmailDetails(int $stepId): JsonResponse
@@ -537,12 +1062,11 @@ class WorkflowController extends AbstractController
         }
 
         $emailDetails = $step->getEmailDetails();
-        
+
         if (!$emailDetails) {
             return $this->json(['error' => 'No email details available'], Response::HTTP_NOT_FOUND);
         }
 
-        // Erweitere Attachment-Details mit Download-URLs
         if (isset($emailDetails['attachments'])) {
             foreach ($emailDetails['attachments'] as &$attachment) {
                 $attachment['preview_url'] = sprintf(
@@ -569,25 +1093,67 @@ class WorkflowController extends AbstractController
     }
 
     /**
-     * ✅ NEU: Sendet eine ausstehende E-Mail
+     * Holt vollständigen E-Mail-Body
      */
-    #[Route('/step/{stepId}/send-email', name: 'send_email', methods: ['POST'])]
-    #[OA\Post(
-        summary: 'Sendet eine ausstehende E-Mail',
+    #[Route('/step/{stepId}/email-body', name: 'step_email_body', methods: ['GET'])]
+    #[OA\Get(
+        summary: 'Holt vollständigen E-Mail-Body',
         parameters: [
             new OA\Parameter(name: 'stepId', in: 'path', required: true)
-        ],
-        responses: [
-            new OA\Response(response: 200, description: 'E-Mail erfolgreich versendet'),
-            new OA\Response(response: 400, description: 'E-Mail kann nicht versendet werden')
         ]
     )]
-    public function sendEmail(int $stepId): JsonResponse
+    public function getStepEmailBody(int $stepId): JsonResponse
     {
         $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
 
         if (!$step) {
             return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $emailDetails = $step->getEmailDetails();
+
+        if (!$emailDetails) {
+            return $this->json(['error' => 'No email details available'], Response::HTTP_NOT_FOUND);
+        }
+
+        return $this->json([
+            'step_id' => $stepId,
+            'recipient' => $emailDetails['recipient'],
+            'subject' => $emailDetails['subject'],
+            'body' => $emailDetails['body'],
+            'body_html' => nl2br(htmlspecialchars($emailDetails['body'], ENT_QUOTES, 'UTF-8')),
+            'attachments' => $emailDetails['attachments']
+        ]);
+    }
+
+    /**
+     * Sendet ausstehende E-Mail
+     */
+    #[Route('/step/{stepId}/send-email', name: 'send_email', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Sendet ausstehende E-Mail',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true)
+        ]
+    )]
+    public function sendEmail(int $stepId): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        
+        if (!$user) {
+            return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
+        }
+        
+        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
+        if (!$step) {
+            return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        // ✅ Security Check: User muss Owner des Workflows sein
+        if ($step->getWorkflow()->getUser()->getId() !== $user->getId()) {
+            return $this->json(['error' => 'Access denied'], Response::HTTP_FORBIDDEN);
         }
 
         if ($step->getStatus() !== 'pending_confirmation') {
@@ -598,10 +1164,9 @@ class WorkflowController extends AbstractController
         }
 
         $workflow = $step->getWorkflow();
-        /** @var User $user */
-        $user = $this->getUser();
 
         try {
+            // ✅ WICHTIG: User-Kontext übergeben
             $this->workflowExecutor->confirmAndSendEmail($workflow, $step, $user);
 
             return $this->json([
@@ -616,6 +1181,7 @@ class WorkflowController extends AbstractController
         } catch (\Exception $e) {
             $this->logger->error('Failed to send email', [
                 'step_id' => $stepId,
+                'user_id' => $user->getId(),
                 'error' => $e->getMessage()
             ]);
 
@@ -627,11 +1193,11 @@ class WorkflowController extends AbstractController
     }
 
     /**
-     * ✅ NEU: Lehnt eine ausstehende E-Mail ab
+     * Lehnt E-Mail ab
      */
     #[Route('/step/{stepId}/reject-email', name: 'reject_email', methods: ['POST'])]
     #[OA\Post(
-        summary: 'Lehnt eine ausstehende E-Mail ab',
+        summary: 'Lehnt ausstehende E-Mail ab',
         parameters: [
             new OA\Parameter(name: 'stepId', in: 'path', required: true)
         ]
@@ -676,19 +1242,29 @@ class WorkflowController extends AbstractController
      * Vorschau eines Anhangs
      */
     #[Route('/step/{stepId}/attachment/{attachmentId}/preview', name: 'step_attachment_preview', methods: ['GET'])]
+    #[OA\Get(
+        summary: 'Zeigt E-Mail-Anhang zur Vorschau',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true),
+            new OA\Parameter(name: 'attachmentId', in: 'path', required: true)
+        ]
+    )]
     public function previewAttachment(int $stepId, int $attachmentId): Response
     {
         $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
         if (!$step) {
             throw $this->createNotFoundException('Step not found');
         }
 
         $document = $this->em->getRepository(UserDocument::class)->find($attachmentId);
+
         if (!$document) {
             throw $this->createNotFoundException('Document not found');
         }
 
         $filePath = $document->getFullPath();
+
         if (!file_exists($filePath)) {
             throw $this->createNotFoundException('File not found');
         }
@@ -700,19 +1276,29 @@ class WorkflowController extends AbstractController
      * Download eines Anhangs
      */
     #[Route('/step/{stepId}/attachment/{attachmentId}/download', name: 'step_attachment_download', methods: ['GET'])]
+    #[OA\Get(
+        summary: 'Lädt E-Mail-Anhang herunter',
+        parameters: [
+            new OA\Parameter(name: 'stepId', in: 'path', required: true),
+            new OA\Parameter(name: 'attachmentId', in: 'path', required: true)
+        ]
+    )]
     public function downloadAttachment(int $stepId, int $attachmentId): Response
     {
         $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
+
         if (!$step) {
             throw $this->createNotFoundException('Step not found');
         }
 
         $document = $this->em->getRepository(UserDocument::class)->find($attachmentId);
+
         if (!$document) {
             throw $this->createNotFoundException('Document not found');
         }
 
         $filePath = $document->getFullPath();
+
         if (!file_exists($filePath)) {
             throw $this->createNotFoundException('File not found');
         }
@@ -725,8 +1311,47 @@ class WorkflowController extends AbstractController
 
         return $response;
     }
+
     /**
-     * Hilfsmethode für unscharfes Matching im Legacy-Endpoint
+     * Gibt verfügbare Tools zurück
+     */
+    #[Route('/capabilities', name: 'capabilities', methods: ['GET'])]
+    #[OA\Get(summary: 'Listet verfügbare Tools und Capabilities')]
+    public function getCapabilities(): JsonResponse
+    {
+        // HINWEIS: Stelle sicher, dass ToolCapabilityChecker eine Methode getAvailableTools() hat,
+        // die ein einfaches Array von Strings (Tool-Namen) zurückgibt.
+        // Falls im Refactoring gelöscht, bitte dort wieder hinzufügen:
+        // public function getAvailableTools(): array { return array_column($this->availableToolDefinitions, 'name'); }
+        
+        $tools = [];
+        if (method_exists($this->capabilityChecker, 'getAvailableTools')) {
+            $tools = $this->capabilityChecker->getAvailableTools();
+        } elseif (method_exists($this->capabilityChecker, 'getAvailableToolDefinitions')) {
+             // Fallback, falls du Getter geändert hast
+             $defs = $this->capabilityChecker->getAvailableToolDefinitions();
+             $tools = array_column($defs, 'name');
+        }
+
+        return $this->json([
+            'tools' => $tools,
+            'tools_count' => count($tools),
+            // Mapping für das Frontend beibehalten (Legacy-Support)
+            'capabilities' => [
+                'apartment_search' => $this->hasToolLike($tools, ['immobilien', 'search', 'apartment']),
+                'calendar_management' => $this->hasToolLike($tools, ['calendar', 'termin', 'schedule']),
+                'email_sending' => $this->hasToolLike($tools, ['mail', 'send']),
+                'web_scraping' => $this->hasToolLike($tools, ['scrape', 'crawl']),
+                'pdf_generation' => $this->hasToolLike($tools, ['pdf']),
+                'api_calling' => $this->hasToolLike($tools, ['api', 'client']),
+            ]
+        ]);
+    }
+
+       
+
+    /**
+     * Hilfsmethode für Tool-Matching
      */
     private function hasToolLike(array $availableTools, array $keywords): bool
     {

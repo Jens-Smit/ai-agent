@@ -26,10 +26,12 @@ class UserDocument
     public const TYPE_TEXT = 'text'; // txt, md
     public const TYPE_OTHER = 'other';
 
+    // HINZUGEFÜGT: CATEGORY_GENERATED für automatisch generierte Dateien
     public const CATEGORY_TEMPLATE = 'template';
     public const CATEGORY_ATTACHMENT = 'attachment';
     public const CATEGORY_REFERENCE = 'reference';
     public const CATEGORY_MEDIA = 'media';
+    public const CATEGORY_GENERATED = 'generated';  // NEU!
     public const CATEGORY_OTHER = 'other';
 
     #[ORM\Id]

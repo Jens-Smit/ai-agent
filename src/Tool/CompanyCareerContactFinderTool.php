@@ -7,13 +7,16 @@ namespace App\Tool;
 use Psr\Log\LoggerInterface;
 use Symfony\AI\Agent\Toolbox\Attribute\AsTool;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Symfony\Contracts\HttpClient\Exception\ExceptionInterface;
 use Symfony\AI\Platform\Contract\JsonSchema\Attribute\With;
-use App\Tool\WebScraperTool; 
-use App\Tool\GoogleSearchTool; 
+// WICHTIG: Die Klassen WebScraperTool und GoogleSearchTool müssen existieren
+// und in den Abhängigkeiten korrekt aufgelöst werden können.
 
 /**
  * Durchsucht das Web für einen gegebenen Firmennamen und versucht, 
  * Kontakt- und Bewerbungsdetails zu extrahieren.
+ *
+ * @final
  */
 #[AsTool(
     name: 'company_career_contact_finder',
@@ -21,29 +24,24 @@ use App\Tool\GoogleSearchTool;
 )]
 final class CompanyCareerContactFinderTool
 {
-    private WebScraperTool $webScraper;
-    private GoogleSearchTool $searchTool; 
-    private LoggerInterface $logger;
-    private HttpClientInterface $httpClient;
-
+    // PHP 8.0+ Constructor Property Promotion für saubere Abhängigkeitsinjektion
     public function __construct(
-        WebScraperTool $webScraper,
-        GoogleSearchTool $searchTool,
-        HttpClientInterface $httpClient,
-        LoggerInterface $logger
+        private WebScraperTool $webScraper,
+        private GoogleSearchTool $searchTool,
+        private HttpClientInterface $httpClient,
+        private LoggerInterface $logger
     ) {
-        $this->webScraper = $webScraper;
-        $this->searchTool = $searchTool;
-        $this->httpClient = $httpClient;
-        $this->logger = $logger;
     }
 
     /**
      * Sucht nach Kontaktinformationen und Bewerbungsdetails für ein Unternehmen.
      *
      * @param string $company_name Der Name des zu recherchierenden Unternehmens.
-     * @return array Ein JSON-Objekt mit den extrahierten Kontaktdaten.
+     * @return array<string, mixed> Ein JSON-Objekt mit den extrahierten Kontaktdaten.
      */
+    #[With([
+        'company_name' => 'Name der Firma (z.B. "Google")',
+    ])]
     public function __invoke(
         string $company_name
     ): array {
@@ -58,90 +56,46 @@ final class CompanyCareerContactFinderTool
             'success' => false,
         ];
 
-        // 1. Finde die Hauptseite und die Karriere-Seite
+        // 1. Google Search nach relevanten URLs
         $searchQuery = sprintf('%s Karriere Bewerbung Kontakt', $company_name);
         $this->logger->debug(sprintf('Führe Google Search mit Query aus: "%s"', $searchQuery));
+        
+        // Annahme: GoogleSearchTool gibt ein Array von URLs zurück
         $searchResults = ($this->searchTool)($searchQuery);
         $potentialUrls = array_values($searchResults);
 
         if (empty($potentialUrls)) {
             $this->logger->warning(sprintf('TOOL-WARN: Keine relevanten Webseiten für %s gefunden.', $company_name));
-            $this->logger->info('TOOL-OUTPUT: Suche abgeschlossen mit leeren Resultaten.', ['result' => $result]);
             return $result;
         }
 
-        // Durchsuche die Top 3 URLs für bessere Trefferquote
-        $urlsToCheck = array_slice($potentialUrls, 0, 3);
+        // Durchsuche die Top 5 URLs für eine bessere Trefferquote
+        $urlsToCheck = array_slice($potentialUrls, 0, 5);
         
-        foreach ($urlsToCheck as $index => $url) {
-            $this->logger->info(sprintf('TOOL-INFO: Prüfe URL #%d: %s', $index + 1, $url));
+        foreach ($urlsToCheck as $url) {
+            $this->logger->info(sprintf('TOOL-INFO: Prüfe URL: %s', $url));
             
-            try {
-                // Hole den kompletten HTML-Content
-                $htmlContent = $this->fetchHtmlContent($url);
-                
-                if ($htmlContent === null) {
-                    $this->logger->warning(sprintf('Konnte HTML-Content von %s nicht abrufen', $url));
-                    continue;
-                }
-                
-                // Extrahiere E-Mails aus dem gesamten HTML-Text
-                $extractedEmails = $this->extractEmailsFromText($htmlContent);
-                
-                foreach ($extractedEmails as $email) {
-                    $emailLower = strtolower($email);
-                    
-                    // Priorisiere Bewerbungs-E-Mails
-                    if (str_contains($emailLower, 'bewerbung') || 
-                        str_contains($emailLower, 'application') || 
-                        str_contains($emailLower, 'karriere') ||
-                        str_contains($emailLower, 'career') ||
-                        str_contains($emailLower, 'hr') ||
-                        str_contains($emailLower, 'jobs')) {
-                        
-                        if ($result['application_email'] === null) {
-                            $result['application_email'] = $email;
-                            $result['career_page_url'] = $url;
-                            $result['success'] = true;
-                            $this->logger->info(sprintf('TOOL-FOUND: Bewerbungs-E-Mail gefunden: %s auf %s', $email, $url));
-                        }
-                    } elseif ($result['general_email'] === null && 
-                              !str_contains($emailLower, 'noreply') &&
-                              !str_contains($emailLower, 'no-reply')) {
-                        $result['general_email'] = $email;
-                        $result['success'] = true; // Auch allgemeine E-Mail ist ein Erfolg
-                        $this->logger->debug(sprintf('TOOL-FOUND: Allgemeine E-Mail gefunden: %s', $email));
-                    }
-                }
-                
-                // Versuche auch strukturiert mit WebScraper
-                $scrapeResult = $this->scrapeWithSelectors($url);
-                
-                // Merge die Ergebnisse
-                if ($scrapeResult['application_email'] && $result['application_email'] === null) {
-                    $result['application_email'] = $scrapeResult['application_email'];
-                    $result['success'] = true;
-                }
-                if ($scrapeResult['general_email'] && $result['general_email'] === null) {
-                    $result['general_email'] = $scrapeResult['general_email'];
-                    $result['success'] = true;
-                }
-                if ($scrapeResult['contact_person'] && $result['contact_person'] === null) {
-                    $result['contact_person'] = $scrapeResult['contact_person'];
-                }
-                
-                // Wenn wir eine Bewerbungs-E-Mail gefunden haben, können wir aufhören
-                if ($result['application_email'] !== null) {
-                    break;
-                }
-                
-            } catch (\Exception $e) {
-                $this->logger->error(sprintf('Fehler beim Verarbeiten von %s: %s', $url, $e->getMessage()));
-                continue;
+            // Versuche, alle Details aus der aktuellen URL zu extrahieren
+            $extractedDetails = $this->processUrl($url);
+            
+            // Merging: Nur nicht-null Werte aus extractedDetails aktualisieren den Haupt-Result
+            $result = array_merge($result, array_filter($extractedDetails, fn($v) => $v !== null));
+            
+            // Wenn eine Bewerbungs-E-Mail gefunden wurde, setze die URL und beende die Suche
+            if ($result['application_email'] !== null) {
+                $result['success'] = true;
+                $result['career_page_url'] = $url;
+                $this->logger->info(sprintf('TOOL-FOUND: Erfolgreiche Kontaktdaten (Bewerbung) gefunden. Beende Suche.'));
+                return $result;
             }
         }
+        
+        // Post-Processing: Wenn allgemeine E-Mail oder Ansprechpartner gefunden, ist es ein Erfolg
+        if ($result['general_email'] !== null || $result['contact_person'] !== null) {
+            $result['success'] = true;
+        }
 
-        // Wenn keine career_page_url gesetzt wurde, aber Daten gefunden wurden, setze die erste URL
+        // Wenn 'success' ist, aber die career_page_url fehlt, setze die erste URL als Fallback
         if ($result['success'] && $result['career_page_url'] === null && !empty($potentialUrls)) {
             $result['career_page_url'] = $potentialUrls[0];
         }
@@ -151,55 +105,131 @@ final class CompanyCareerContactFinderTool
     }
     
     /**
-     * Holt den HTML-Content einer URL
+     * Verarbeitet eine einzelne URL, extrahiert alle verfügbaren Kontakt-Details.
+     * * @param string $url Die zu verarbeitende URL.
+     * @return array<string, mixed> Teil-Ergebnis-Array.
+     */
+    private function processUrl(string $url): array
+    {
+        $details = [
+            'general_email' => null,
+            'application_email' => null,
+            'contact_person' => null,
+        ];
+
+        $htmlContent = $this->fetchHtmlContent($url);
+        
+        if ($htmlContent === null) {
+            return $details;
+        }
+        
+        // 1. Extrahiere E-Mails aus dem gesamten HTML-Text (robustester Weg)
+        $extractedEmails = $this->extractEmailsFromText($htmlContent);
+        
+        foreach ($extractedEmails as $email) {
+            $this->classifyAndSetEmail($email, $details);
+        }
+
+        // 2. Versuche auch strukturiert mit WebScraper (für Ansprechpartner und Mailto-Links)
+        $scrapeResult = $this->scrapeWithSelectors($url);
+
+        // E-Mail-Klassifizierung aus Scrape-Resultaten (falls nicht schon im Raw-HTML gefunden)
+        if ($scrapeResult['mailto_emails'] ?? null) {
+            foreach ($scrapeResult['mailto_emails'] as $email) {
+                $this->classifyAndSetEmail($email, $details);
+            }
+        }
+        
+        // Ansprechpartner-Erkennung
+        if ($details['contact_person'] === null && ($scrapeResult['contact_person'] ?? null)) {
+            $details['contact_person'] = $scrapeResult['contact_person'];
+        }
+        
+        return $details;
+    }
+
+    /**
+     * Klassifiziert eine E-Mail als 'application' oder 'general' und setzt sie im Ergebnis-Array, 
+     * sofern noch nicht vorhanden.
+     * * @param string $email Die zu klassifizierende E-Mail.
+     * @param array<string, mixed> &$details Das Ergebnis-Array, das aktualisiert wird.
+     */
+    private function classifyAndSetEmail(string $email, array &$details): void
+    {
+        $emailLower = strtolower($email);
+
+        // Prüfe auf Bewerbungs-E-Mail Keywords
+        $isApplicationEmail = (
+            str_contains($emailLower, 'bewerbung') || 
+            str_contains($emailLower, 'application') || 
+            str_contains($emailLower, 'karriere') ||
+            str_contains($emailLower, 'career') ||
+            str_contains($emailLower, 'hr') ||
+            str_contains($emailLower, 'jobs')
+        );
+
+        if ($isApplicationEmail && $details['application_email'] === null) {
+            $details['application_email'] = $email;
+            $this->logger->debug(sprintf('TOOL-FOUND: Bewerbungs-E-Mail gesetzt: %s', $email));
+        } elseif ($details['general_email'] === null && 
+                  !str_contains($emailLower, 'noreply') && 
+                  !str_contains($emailLower, 'no-reply')) {
+            // Setze nur, wenn es keine "noreply" Adresse ist und noch keine allgemeine Mail gesetzt wurde
+            $details['general_email'] = $email;
+            $this->logger->debug(sprintf('TOOL-FOUND: Allgemeine E-Mail gesetzt: %s', $email));
+        }
+    }
+
+    /**
+     * Holt den HTML-Content einer URL unter Verwendung des HTTP-Clients.
      */
     private function fetchHtmlContent(string $url): ?string
     {
         try {
+            // Zeitgemäßes Request-Handling mit Timeout und User-Agent
             $response = $this->httpClient->request('GET', $url, [
-                'timeout' => 30,
+                'timeout' => 15, // Reduziertes Timeout
                 'max_redirects' => 5,
                 'headers' => [
-                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'User-Agent' => 'Mozilla/5.0 (compatible; CompanyFinderBot/1.0; +https://example.com/bot)',
                     'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language' => 'de-DE,de;q=0.9,en;q=0.8',
                 ],
             ]);
             
             if ($response->getStatusCode() >= 400) {
+                $this->logger->warning(sprintf('HTTP-Fehler %d beim Abrufen von %s.', $response->getStatusCode(), $url));
                 return null;
             }
             
             return $response->getContent();
             
-        } catch (\Exception $e) {
+        } catch (ExceptionInterface $e) { // Fange spezifische HTTP-Client-Exceptions ab
             $this->logger->error(sprintf('Fehler beim Abrufen von %s: %s', $url, $e->getMessage()));
             return null;
         }
     }
     
     /**
-     * Extrahiert alle E-Mail-Adressen aus einem Text
+     * Extrahiert alle gültigen E-Mail-Adressen aus einem Text.
      */
     private function extractEmailsFromText(string $text): array
     {
         $emails = [];
-        
-        // Umfassender E-Mail-Regex
+        // Regex für E-Mail-Adressen, inkl. Blacklist-Filter
         $pattern = '/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/';
         
         if (preg_match_all($pattern, $text, $matches)) {
             $emails = array_unique($matches[0]);
             
-            // Filtere offensichtlich ungültige E-Mails
-            $emails = array_filter($emails, function($email) {
+            $emails = array_filter($emails, function(string $email): bool {
                 $emailLower = strtolower($email);
                 
-                // Blacklist ungültiger Domains/Muster
+                // Blacklist ungültiger oder generischer Platzhalter-Muster
                 $blacklist = [
-                    'example.com', 'domain.com', 'test@', 'email@', 
-                    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp',
-                    'user@', 'name@', 'your@', 'company@'
+                    'example.com', 'domain.com', 'test@', 'email@', 'user@', 'name@',
+                    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', // Ausschluss von Dateiendungen
+                    'placeholder', 'mustermann',
                 ];
                 
                 foreach ($blacklist as $blocked) {
@@ -208,7 +238,8 @@ final class CompanyCareerContactFinderTool
                     }
                 }
                 
-                return true;
+                // Zusätzliche Validierung (könnte in Symfony\Component\Validator ausgelagert werden)
+                return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
             });
         }
         
@@ -216,135 +247,86 @@ final class CompanyCareerContactFinderTool
     }
     
     /**
-     * Scraped mit spezifischen Selektoren (Fallback-Methode)
+     * Scraped mit spezifischen Selektoren mithilfe des WebScraperTools.
+     * * @return array{mailto_emails: string[], contact_person: ?string}
      */
     private function scrapeWithSelectors(string $url): array
     {
-        $result = [
-            'general_email' => null,
-            'application_email' => null,
-            'contact_person' => null,
-        ];
-        
-        // Erweiterte Selektoren für verschiedene Website-Strukturen
         $selectors = [
             'mailto_links' => 'a[href^="mailto"]::href',
-            'email_paragraphs' => 'p, div, span, li::text',
+            'person_elements' => '.name, .contact-name, .author, .staff-name, [itemprop="name"]::text',
             'contact_headings' => 'h1, h2, h3, h4, h5, h6::text',
-            'person_elements' => '.name, .contact-name, .author, .staff-name::text',
         ];
         
         $scrapeResult = ($this->webScraper)($url, $selectors);
-        
-        if (isset($scrapeResult['data'])) {
-            $data = $scrapeResult['data'];
-            
-            // E-Mails aus mailto-Links
-            if (isset($data['mailto_links'])) {
-                $mailtoLinks = is_array($data['mailto_links']) ? $data['mailto_links'] : [$data['mailto_links']];
-                
-                foreach ($mailtoLinks as $mailto) {
-                    if (is_string($mailto) && str_starts_with($mailto, 'mailto:')) {
-                        $email = str_replace('mailto:', '', $mailto);
-                        $email = explode('?', $email)[0]; // Entferne Query-Parameter
-                        $email = trim($email);
-                        
-                        $emailLower = strtolower($email);
-                        if (str_contains($emailLower, 'bewerbung') || 
-                            str_contains($emailLower, 'application') ||
-                            str_contains($emailLower, 'karriere') ||
-                            str_contains($emailLower, 'hr')) {
-                            $result['application_email'] = $email;
-                        } elseif ($result['general_email'] === null) {
-                            $result['general_email'] = $email;
-                        }
-                    }
-                }
-            }
-            
-            // E-Mails aus Text-Paragraphen
-            if (isset($data['email_paragraphs'])) {
-                $paragraphs = is_array($data['email_paragraphs']) ? $data['email_paragraphs'] : [$data['email_paragraphs']];
-                
-                foreach ($paragraphs as $paragraph) {
-                    if (is_string($paragraph)) {
-                        $foundEmails = $this->extractEmailsFromText($paragraph);
-                        
-                        foreach ($foundEmails as $email) {
-                            $emailLower = strtolower($email);
-                            if (str_contains($emailLower, 'bewerbung') || 
-                                str_contains($emailLower, 'application') ||
-                                str_contains($emailLower, 'karriere') ||
-                                str_contains($emailLower, 'hr')) {
-                                
-                                if ($result['application_email'] === null) {
-                                    $result['application_email'] = $email;
-                                }
-                            } elseif ($result['general_email'] === null) {
-                                $result['general_email'] = $email;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Ansprechpartner-Erkennung - VERBESSERT
-            if (isset($data['person_elements'])) {
-                $persons = is_array($data['person_elements']) ? $data['person_elements'] : [$data['person_elements']];
-                
-                foreach ($persons as $name) {
-                    $name = trim($name);
-                    if ($this->isValidPersonName($name)) {
-                        $result['contact_person'] = $name;
-                        break;
-                    }
-                }
-            }
-            
-            // Fallback: Suche in Überschriften nach Personennamen
-            if ($result['contact_person'] === null && isset($data['contact_headings'])) {
-                $headings = is_array($data['contact_headings']) ? $data['contact_headings'] : [$data['contact_headings']];
-                
-                foreach ($headings as $heading) {
-                    $heading = trim($heading);
-                    if ($this->isValidPersonName($heading)) {
-                        $result['contact_person'] = $heading;
-                        break;
-                    }
+        $data = $scrapeResult['data'] ?? [];
+
+        $contactPerson = null;
+        $mailtoEmails = [];
+
+        // 1. E-Mails aus mailto-Links extrahieren
+        if (isset($data['mailto_links'])) {
+            $mailtoLinks = is_array($data['mailto_links']) ? $data['mailto_links'] : [$data['mailto_links']];
+            foreach ($mailtoLinks as $mailto) {
+                if (is_string($mailto) && str_starts_with($mailto, 'mailto:')) {
+                    $email = explode('?', str_replace('mailto:', '', $mailto))[0]; // Entferne Query-Parameter
+                    $mailtoEmails[] = trim($email);
                 }
             }
         }
         
-        return $result;
+        // 2. Ansprechpartner-Erkennung aus spezifischen Selektoren
+        if (isset($data['person_elements'])) {
+            $persons = is_array($data['person_elements']) ? $data['person_elements'] : [$data['person_elements']];
+            foreach ($persons as $name) {
+                $name = trim($name);
+                if ($this->isValidPersonName($name)) {
+                    $contactPerson = $name;
+                    break;
+                }
+            }
+        }
+        
+        // 3. Fallback: Suche in Überschriften nach Personennamen
+        if ($contactPerson === null && isset($data['contact_headings'])) {
+            $headings = is_array($data['contact_headings']) ? $data['contact_headings'] : [$data['contact_headings']];
+            foreach ($headings as $heading) {
+                $heading = trim($heading);
+                if ($this->isValidPersonName($heading)) {
+                    $contactPerson = $heading;
+                    break;
+                }
+            }
+        }
+        
+        return [
+            'mailto_emails' => array_unique($mailtoEmails),
+            'contact_person' => $contactPerson,
+        ];
     }
     
     /**
-     * Prüft, ob ein String ein valider Personenname ist
+     * Prüft, ob ein String ein valider, relevanter Personenname ist.
      */
     private function isValidPersonName(string $name): bool
     {
+        $name = trim($name);
+
         // Muss mindestens 2 Wörter haben (Vor- und Nachname)
         if (str_word_count($name) < 2) {
             return false;
         }
         
-        // Nicht mehr als 5 Wörter (sonst wahrscheinlich ein Satz)
+        // Nicht mehr als 5 Wörter (sonst wahrscheinlich ein Satz oder eine Position)
         if (str_word_count($name) > 5) {
             return false;
         }
         
-        // Nicht zu lang (max 60 Zeichen)
-        if (strlen($name) > 60) {
-            return false;
-        }
-        
-        // Blacklist für häufige Nicht-Namen
+        // Blacklist für häufige Nicht-Namen/Phrasen
         $blacklist = [
             'impressum', 'kontakt', 'datenschutz', 'agb', 'copyright', 
             'karriere', 'jobs', 'bewerbung', 'stellenangebote',
-            'für nachunternehmer', 'für lieferanten', 'für bewerber',
             'unser team', 'ihre ansprechpartner', 'das team',
-            'kontaktieren sie', 'schreiben sie', 'rufen sie',
             'mehr informationen', 'weitere infos',
         ];
         
@@ -355,13 +337,8 @@ final class CompanyCareerContactFinderTool
             }
         }
         
-        // Muss Großbuchstaben enthalten (typisch für Namen)
-        if (!preg_match('/[A-ZÄÖÜ]/', $name)) {
-            return false;
-        }
-        
-        // Darf nicht nur Großbuchstaben sein (wahrscheinlich Überschrift)
-        if ($name === strtoupper($name)) {
+        // Muss Großbuchstaben enthalten (typisch für Namen), aber nicht NUR Großbuchstaben (typisch für Überschriften)
+        if (!preg_match('/[A-ZÄÖÜ]/', $name) || ($name === strtoupper($name) && strlen($name) > 5)) {
             return false;
         }
         
