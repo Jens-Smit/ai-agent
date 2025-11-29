@@ -325,6 +325,235 @@ class WorkflowController extends AbstractController
         }
     }
     /**
+     * ✅ NEU: Startet einen fehlgeschlagenen Workflow neu
+     */
+    #[Route('/{workflowId}/restart', name: 'restart', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Startet fehlgeschlagenen Workflow neu',
+        parameters: [
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
+        ],
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(
+                properties: [
+                    new OA\Property(property: 'reset_failed_steps', type: 'boolean', default: true),
+                    new OA\Property(property: 'from_step', type: 'integer', description: 'Optional: Ab welchem Step neu starten')
+                ]
+            )
+        )
+    )]
+    public function restartWorkflow(int $workflowId, Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        // Prüfe ob Workflow neugestartet werden kann
+        $allowedStatuses = ['failed', 'waiting_user_input', 'waiting_confirmation'];
+        if (!in_array($workflow->getStatus(), $allowedStatuses)) {
+            return $this->json([
+                'error' => 'Workflow cannot be restarted',
+                'current_status' => $workflow->getStatus(),
+                'allowed_statuses' => $allowedStatuses
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $data = json_decode($request->getContent(), true) ?? [];
+        $resetFailedSteps = $data['reset_failed_steps'] ?? true;
+        $fromStep = $data['from_step'] ?? null;
+
+        try {
+            // ✅ Reset failed/pending Steps
+            foreach ($workflow->getSteps() as $step) {
+                // Reset alle Steps ab dem angegebenen Step
+                if ($fromStep !== null && $step->getStepNumber() >= $fromStep) {
+                    if ($step->getStatus() !== 'completed') {
+                        $step->setStatus('pending');
+                        $step->setErrorMessage(null);
+                        $step->setResult(null);
+                        
+                        $this->logger->info('Reset step for restart', [
+                            'workflow_id' => $workflowId,
+                            'step' => $step->getStepNumber()
+                        ]);
+                    }
+                }
+                // Reset nur failed Steps
+                elseif ($resetFailedSteps && $step->getStatus() === 'failed') {
+                    $step->setStatus('pending');
+                    $step->setErrorMessage(null);
+                    
+                    $this->logger->info('Reset failed step', [
+                        'workflow_id' => $workflowId,
+                        'step' => $step->getStepNumber()
+                    ]);
+                }
+            }
+
+            // Setze Workflow zurück
+            $workflow->setStatus('approved'); // Bereit zur Ausführung
+            $workflow->setCurrentStep(null);
+            $this->em->flush();
+
+            // ✅ WICHTIG: Starte Workflow mit User-Kontext
+            $this->workflowEngine->executeWorkflow($workflow, $user);
+
+            return $this->json([
+                'status' => 'restarted',
+                'workflow_id' => $workflow->getId(),
+                'workflow_status' => $workflow->getStatus(),
+                'message' => 'Workflow wurde neu gestartet'
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to restart workflow', [
+                'workflow_id' => $workflowId,
+                'error' => $e->getMessage()
+            ]);
+
+            return $this->json([
+                'error' => 'Failed to restart workflow',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * ✅ NEU: Injiziert User-Kontext in wartenden Workflow
+     */
+    #[Route('/{workflowId}/inject-user-context', name: 'inject_user_context', methods: ['POST'])]
+    #[OA\Post(
+        summary: 'Injiziert User-Kontext in wartenden Workflow',
+        parameters: [
+            new OA\Parameter(name: 'workflowId', in: 'path', required: true)
+        ]
+    )]
+    public function injectUserContext(int $workflowId): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        
+        if (!$user) {
+            return $this->json([
+                'error' => 'Authentication required'
+            ], Response::HTTP_UNAUTHORIZED);
+        }
+
+        $workflow = $this->workflowRepo->find($workflowId);
+
+        if (!$workflow) {
+            return $this->json(['error' => 'Workflow not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        // ✅ Prüfe ob Workflow User-Kontext braucht
+        if ($workflow->getStatus() !== 'waiting_user_input') {
+            return $this->json([
+                'error' => 'Workflow is not waiting for user input',
+                'current_status' => $workflow->getStatus()
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        try {
+            // ✅ Finde Step der User-Kontext braucht
+            $pendingStep = null;
+            foreach ($workflow->getSteps() as $step) {
+                if ($step->getStatus() === 'pending_confirmation' || 
+                    $step->getStatus() === 'failed') {
+                    $emailDetails = $step->getEmailDetails();
+                    if ($emailDetails && ($emailDetails['requires_user_context'] ?? false)) {
+                        $pendingStep = $step;
+                        break;
+                    }
+                }
+            }
+
+            if (!$pendingStep) {
+                return $this->json([
+                    'error' => 'No step found that requires user context'
+                ], Response::HTTP_BAD_REQUEST);
+            }
+
+            // ✅ Aktualisiere E-Mail-Details mit User-ID
+            $emailDetails = $pendingStep->getEmailDetails();
+            $emailDetails['_user_id'] = $user->getId();
+            $emailDetails['requires_user_context'] = false;
+            $emailDetails['ready_to_send'] = true;
+            
+            // ✅ Lade vollständige Attachment-Details
+            if (!empty($emailDetails['attachments'])) {
+                $resolvedAttachments = [];
+                foreach ($emailDetails['attachments'] as $attachment) {
+                    if (isset($attachment['placeholder']) && $attachment['placeholder'] === true) {
+                        // Lade echte Dokument-Details
+                        $docId = $attachment['id'];
+                        $document = $this->em->getRepository(\App\Entity\UserDocument::class)->find($docId);
+                        
+                        if ($document && $document->getUser() === $user) {
+                            $fileSize = $document->getFileSize() ?? 0;
+                            $resolvedAttachments[] = [
+                                'id' => $document->getId(),
+                                'filename' => $document->getOriginalFilename(),
+                                'size' => $fileSize,
+                                'size_human' => $this->formatBytes($document->getFileSize()),
+                                'mime_type' => $document->getMimeType(),
+                                'type' => $document->getDocumentType(),
+                                'download_url' => sprintf('/api/documents/%d/download', $document->getId())
+                            ];
+                        }
+                    } else {
+                        $resolvedAttachments[] = $attachment;
+                    }
+                }
+                $emailDetails['attachments'] = $resolvedAttachments;
+                $emailDetails['attachment_count'] = count($resolvedAttachments);
+            }
+
+            $pendingStep->setEmailDetails($emailDetails);
+            $pendingStep->setStatus('pending_confirmation');
+            
+            // ✅ Resolve User Interaction
+            $workflow->resolveUserInteraction([
+                'user_id' => $user->getId(),
+                'action' => 'context_injected',
+                'timestamp' => (new \DateTimeImmutable())->format('c')
+            ]);
+            
+            $workflow->setStatus('waiting_confirmation');
+            
+            $this->em->flush();
+
+            $this->logger->info('User context injected into workflow', [
+                'workflow_id' => $workflowId,
+                'user_id' => $user->getId(),
+                'step_id' => $pendingStep->getId()
+            ]);
+
+            return $this->json([
+                'status' => 'success',
+                'message' => 'User-Kontext erfolgreich injiziert',
+                'workflow_id' => $workflow->getId(),
+                'workflow_status' => $workflow->getStatus(),
+                'step_id' => $pendingStep->getId(),
+                'email_details' => $emailDetails
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to inject user context', [
+                'workflow_id' => $workflowId,
+                'error' => $e->getMessage()
+            ]);
+
+            return $this->json([
+                'error' => 'Failed to inject user context',
+                'message' => $e->getMessage()
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+    }
+    /**
      * ✅ Listet User-Workflows
      */
     #[Route('/list', name: 'list', methods: ['GET'])]
@@ -520,6 +749,7 @@ class WorkflowController extends AbstractController
         $steps = [];
         foreach ($workflow->getSteps() as $step) {
             $stepData = [
+                'id' => $step->getId(),
                 'step_number' => $step->getStepNumber(),
                 'type' => $step->getStepType(),
                 'description' => $step->getDescription(),
@@ -1044,7 +1274,7 @@ class WorkflowController extends AbstractController
         }
     }
     /**
-     * Holt E-Mail-Details eines Steps
+     * ✅ VERBESSERT: Holt E-Mail-Details auch für incomplete emails
      */
     #[Route('/step/{stepId}/email', name: 'step_email_details', methods: ['GET'])]
     #[OA\Get(
@@ -1067,29 +1297,64 @@ class WorkflowController extends AbstractController
             return $this->json(['error' => 'No email details available'], Response::HTTP_NOT_FOUND);
         }
 
+        // ✅ NEU: Generiere Preview-URLs auch für Placeholder-Attachments
         if (isset($emailDetails['attachments'])) {
             foreach ($emailDetails['attachments'] as &$attachment) {
-                $attachment['preview_url'] = sprintf(
-                    '/api/workflow/step/%d/attachment/%d/preview',
-                    $stepId,
-                    $attachment['id']
-                );
-                $attachment['download_url'] = sprintf(
-                    '/api/workflow/step/%d/attachment/%d/download',
-                    $stepId,
-                    $attachment['id']
-                );
+                if (!isset($attachment['preview_url'])) {
+                    $attachment['preview_url'] = sprintf(
+                        '/api/workflow/step/%d/attachment/%s/preview',
+                        $stepId,
+                        $attachment['id']
+                    );
+                }
+                if (!isset($attachment['download_url'])) {
+                    $attachment['download_url'] = sprintf(
+                        '/api/workflow/step/%d/attachment/%s/download',
+                        $stepId,
+                        $attachment['id']
+                    );
+                }
             }
         }
+
+        // ✅ Status-Checks
+        $canSend = $step->getStatus() === 'pending_confirmation' && 
+                ($emailDetails['ready_to_send'] ?? false);
+        
+        $needsUserContext = $emailDetails['requires_user_context'] ?? false;
 
         return $this->json([
             'step_id' => $stepId,
             'step_number' => $step->getStepNumber(),
             'status' => $step->getStatus(),
             'email_details' => $emailDetails,
-            'can_send' => $step->getStatus() === 'pending_confirmation',
-            'can_reject' => $step->getStatus() === 'pending_confirmation'
+            'can_send' => $canSend,
+            'can_reject' => $step->getStatus() === 'pending_confirmation',
+            'needs_user_context' => $needsUserContext,
+            'actions_available' => [
+                'send' => $canSend ? '/api/workflow/step/' . $stepId . '/send-email' : null,
+                'reject' => $step->getStatus() === 'pending_confirmation' ? '/api/workflow/step/' . $stepId . '/reject-email' : null,
+                'inject_context' => $needsUserContext ? '/api/workflow/' . $step->getWorkflow()->getId() . '/inject-user-context' : null
+            ]
         ]);
+    }
+
+    /**
+     * Hilfsmethode für Bytes-Formatierung
+     */
+    private function formatBytes(int $bytes, int $precision = 2): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+        $bytes = max($bytes, 0);
+        $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
+        $pow = min($pow, count($units) - 1);
+
+        // Alternative: $pow = ($bytes > 0) ? floor(log($bytes, 1024)) : 0; 
+        
+        $bytes /= (1 << (10 * $pow));
+
+        return round($bytes, $precision) . ' ' . $units[$pow];
     }
 
     /**
@@ -1156,10 +1421,10 @@ class WorkflowController extends AbstractController
             return $this->json(['error' => 'Access denied'], Response::HTTP_FORBIDDEN);
         }
 
-        if ($step->getStatus() !== 'pending_confirmation') {
+        if ($user->getUserSettings()->getEmailAddress() === null) {
             return $this->json([
-                'error' => 'Email is not pending confirmation',
-                'current_status' => $step->getStatus()
+                'error' => 'Keine Absender-E-Mail-Adresse konfiguriert',
+                'message' => 'Bitte konfigurieren Sie eine Absender-E-Mail-Adresse in Ihren Benutzereinstellungen, bevor Sie E-Mails senden.'
             ], Response::HTTP_BAD_REQUEST);
         }
 
@@ -1210,12 +1475,7 @@ class WorkflowController extends AbstractController
             return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
         }
 
-        if ($step->getStatus() !== 'pending_confirmation') {
-            return $this->json([
-                'error' => 'Email is not pending confirmation',
-                'current_status' => $step->getStatus()
-            ], Response::HTTP_BAD_REQUEST);
-        }
+        
 
         $workflow = $step->getWorkflow();
 
@@ -1347,8 +1607,6 @@ class WorkflowController extends AbstractController
             ]
         ]);
     }
-
-       
 
     /**
      * Hilfsmethode für Tool-Matching

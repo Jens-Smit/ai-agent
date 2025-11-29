@@ -345,8 +345,39 @@ Du bist ein intelligenter Workflow-Planer. Erstelle effiziente, ausführbare Wor
      "parameters": {
        "to": "{{step_3.result.application_email|step_3.result.general_email}}",
        "subject": "Bewerbung als {{step_2.result.job_title}}",
-       "body": "Sehr geehrte Damen und Herren,\n\nanbei sende ich Ihnen meine Bewerbungsunterlagen.\n\nMit freundlichen Grüßen",
+       "body": "Sehr geehrte Damen und Herren,anbei sende ich Ihnen meine Bewerbungsunterlagen.
+       Mit freundlichen Grüßen",
        "attachments": ["{{step_7.result.document_id}}", "{{step_5.result.resume_id}}"]
+     }}
+  ]
+}
+```
+**Variante C: Mit Dokumenten-Extraktion für fehlende Suchparameter (Wenn 'was'/'wo' im Request fehlen)**
+```json
+{
+  "steps": [
+    {"type": "tool_call", "tool": "user_document_list", "parameters": {"tags": "Lebenslauf"}},
+    {"type": "analysis", "description": "Wähle den besten Lebenslauf ('identifier') aus der Liste aus.",
+      "output_format": {"resume_identifier": "string"}},
+    {"type": "tool_call", "tool": "user_document_read", 
+      "parameters": {"identifier": "{{step_2.result.resume_identifier}}"}},
+    {"type": "analysis", "description": "Analysiere den Lebenslauf-Inhalt (step_3) und extrahiere die gewünschte Berufsbezeichnung ('was') und den bevorzugten Standort ('wo') für die Jobsuche. Dies ersetzt fehlende User-Eingaben. Die resultierenden Parameter müssen für eine mögliche Schleife (4-5 Versuche) verwendet werden.",
+      "output_format": {"job_search_what": "string", "job_search_where": "string", "resume_id": "{{step_2.result.resume_identifier}}"}
+    },
+    {"type": "tool_call", "tool": "job_search",
+      "parameters": {"what": "{{step_4.result.job_search_what}}", "where": "{{step_4.result.job_search_where}}", "size": 1}},
+    {"type": "analysis", "description": "Extrahiere Job-Details. Wenn kein Ergebnis gefunden wurde, signalisiert dies dem übergeordneten System, die Suche mit angepassten Parametern zu wiederholen.", 
+     "output_format": {"job_title": "string", "company_name": "string", "job_url": "string"}},
+    {"type": "tool_call", "tool": "company_career_contact_finder", 
+     "parameters": {"company_name": "{{step_6.result.company_name}}"}},
+    {"type": "analysis", "description": "Erstelle Bewerbungstext",
+     "output_format": {"cover_letter_text": "string"}},
+    {"type": "tool_call", "tool": "send_email", "requires_confirmation": true,
+     "parameters": {
+       "to": "{{step_7.result.application_email|step_7.result.general_email}}",
+       "subject": "Bewerbung als {{step_6.result.job_title}}",
+       "body": "{{step_8.result.cover_letter_text}}",
+       "attachments": ["{{step_4.result.resume_id}}"]
      }}
   ]
 }
@@ -356,18 +387,65 @@ Du bist ein intelligenter Workflow-Planer. Erstelle effiziente, ausführbare Wor
 
 1. **Bevorzuge Variante A** (Text direkt im Body) - einfacher und schneller
 2. **Verwende Variante B** nur wenn User explizit "PDF" oder "Anschreiben als Anhang" sagt
-3. **Attachments sind OPTIONAL** - weglassen wenn nicht nötig
-4. **Kleine Steps** - besser 7 kleine als 3 große Steps
-5. **Pipe-Fallbacks** für E-Mails: {{email1|email2|default@example.com}}
+3. Verwende Variante C wenn der User eine Bewerbung starten will, aber die Suchparameter ('was'/'wo') im Request fehlen.
+4. **Attachments sind OPTIONAL** - weglassen wenn nicht nötig
+5. **Kleine Steps** - besser 7 kleine als 3 große Steps
+6. **Pipe-Fallbacks** für E-Mails: {{email1|email2|default@example.com}}
 
-📤 OUTPUT FORMAT (NUR JSON, KEINE ERKLÄRUNG):
+OUTPUT-FORMAT (NUR JSON):
 ```json
 {
-  "steps": [ /* Deine Steps hier */ ]
+  "steps": [
+    {
+      "type": "tool_call",
+      "description": "Suche Jobs in Hamburg",
+      "tool": "job_search",
+      "parameters": {
+        "what": "Entwickler",
+        "where": "Hamburg",
+        "size": 1
+      }
+    },
+    {
+      "type": "analysis",
+      "description": "Extrahiere Jobdetails",
+      "output_format": {
+        "job_title": "string",
+        "company_name": "string",
+        "job_description": "string",
+        "job_location": "string"
+      }
+    },
+    {
+      "type": "tool_call",
+      "description": "Finde Firmenkontakte",
+      "tool": "company_career_contact_finder",
+      "parameters": {
+        "company_name": "{{step_2.result.company_name}}"
+      }
+    },
+    {
+        "type": "tool_call",
+        "tool": "send_email",
+        "parameters": {
+            "to": "{{step_3.result.application_email|step_3.result.general_email}}",
+            "subject": "Bewerbung - {{step_2.result.company_name}}",
+            "body": "Sehr geehrte Damen und Herren...",
+            "attachments": [
+                "{{step_6.result.resume_id}}",
+                "{{step_9.result.filepath}}"
+            ]
+        }
+    }
+  ]
 }
 ```
 
-WICHTIG: Analysiere die User-Anfrage und wähle die PASSENDE Variante!
+REGELN:
+1. Output-Format IMMER definieren bei analysis/decision
+2. Feldnamen müssen EXAKT in Platzhaltern verwendet werden
+3. requires_confirmation: true für E-Mails, Termine, Zahlungen
+4. Kleine, atomare Steps bevorzugen
 PROMPT;
     }
 }

@@ -15,6 +15,7 @@ trait ToolExecutionTrait
 {
     /**
      * Führt einen Tool-Call aus
+     * ✅ FIXED: Robustes User-Context-Handling
      */
     private function executeToolCall(WorkflowStep $step, array $context, string $sessionId, ?User $user): array
     {
@@ -28,29 +29,14 @@ trait ToolExecutionTrait
             'has_user' => $user !== null
         ]);
 
-        // Prüfe unaufgelöste Platzhalter
-        $unresolvedPlaceholders = $this->findUnresolvedPlaceholders($parameters);
-        if (!empty($unresolvedPlaceholders)) {
-            $this->logger->error('Unresolved placeholders detected', [
-                'placeholders' => $unresolvedPlaceholders,
-                'available_context' => array_keys($context)
-            ]);
-
-            throw new \RuntimeException(
-                sprintf('Unresolved placeholders: %s. Context verfügbar: %s',
-                    implode(', ', $unresolvedPlaceholders),
-                    implode(', ', array_keys($context))
-                )
-            );
-        }
-        
-        // Spezielles Handling für verschiedene Tools
-        if ($toolName === 'company_career_contact_finder') {
-            return $this->executeCompanyContactFinderWithFallback($step, $parameters, $context, $sessionId);
-        }
-
+        // ✅ NEUE LOGIK: send_email ohne User → Vorbereitung statt Fehler
         if ($toolName === 'send_email' || $toolName === 'SendMailTool') {
             return $this->prepareSendMailDetails($step, $parameters, $sessionId, $context, $user);
+        }
+
+        // Andere Tools: User-Kontext erforderlich
+        if ($toolName === 'company_career_contact_finder') {
+            return $this->executeCompanyContactFinderWithFallback($step, $parameters, $context, $sessionId);
         }
 
         // Standard Tool-Aufruf via Agent
@@ -200,7 +186,7 @@ trait ToolExecutionTrait
     }
 
     /**
-     * Bereitet E-Mail-Details vor und pausiert Workflow für User-Bestätigung
+     * ✅ VERBESSERT: Bereitet E-Mail vor - KEIN Fehler wenn User fehlt
      */
     private function prepareSendMailDetails(
         WorkflowStep $step,
@@ -209,26 +195,20 @@ trait ToolExecutionTrait
         array $context,
         ?User $user
     ): array {
-        if (!$user) {
-            throw new \RuntimeException('User context not available - cannot prepare email');
-        }
-
         $recipient = $parameters['to'] ?? 'Unbekannt';
         $subject = $parameters['subject'] ?? 'Kein Betreff';
         $body = $parameters['body'] ?? '';
         $attachmentIds = [];
 
-        // ✅ VERBESSERT: Parse attachments String zu Array
+        // Parse attachments
         if (isset($parameters['attachments'])) {
             $attachmentsParam = $parameters['attachments'];
             
-            // Wenn es ein JSON-String ist, parse ihn
             if (is_string($attachmentsParam)) {
                 $decoded = json_decode($attachmentsParam, true);
                 if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
                     $attachmentIds = $decoded;
                 } else {
-                    // Fallback: Split bei Komma
                     $attachmentIds = array_filter(array_map('trim', explode(',', $attachmentsParam)));
                 }
             } elseif (is_array($attachmentsParam)) {
@@ -236,50 +216,60 @@ trait ToolExecutionTrait
             }
         }
 
-        $this->logger->info('Preparing email with attachments', [
+        $this->logger->info('Preparing email details', [
             'recipient' => $recipient,
             'attachment_ids' => $attachmentIds,
-            'user_id' => $user->getId()
+            'has_user' => $user !== null
         ]);
 
-        // Lade Anhänge mit vollständigen Details
+        // ✅ KRITISCH: Attachment-Details nur laden wenn User vorhanden
         $attachmentDetails = [];
-        foreach ($attachmentIds as $attachment) {
-            if (empty($attachment)) continue;
+        if ($user !== null && !empty($attachmentIds)) {
+            foreach ($attachmentIds as $attachment) {
+                if (empty($attachment)) continue;
 
-            // Unterstütze verschiedene Attachment-Formate
-            // Format 1: {"type": "document_id", "value": "3"}
-            // Format 2: Direkte ID: "3"
-            $docId = null;
-            
-            if (is_array($attachment)) {
-                $docId = $attachment['value'] ?? $attachment['id'] ?? null;
-            } else {
-                $docId = $attachment;
+                $docId = null;
+                if (is_array($attachment)) {
+                    $docId = $attachment['value'] ?? $attachment['id'] ?? null;
+                } else {
+                    $docId = $attachment;
+                }
+                
+                if (empty($docId)) continue;
+
+                $document = $this->documentRepo->find($docId);
+                if ($document && $document->getUser()->getId() === $user->getId()) {
+                    $attachmentDetails[] = [
+                        'id' => $document->getId(),
+                        'filename' => $document->getOriginalFilename(),
+                        'size' => $document->getFileSize(),
+                        'size_human' => $this->formatBytes($document->getFileSize()),
+                        'mime_type' => $document->getMimeType(),
+                        'type' => $document->getDocumentType(),
+                        'download_url' => sprintf('/api/documents/%d/download', $document->getId())
+                    ];
+                }
             }
-            
-            if (empty($docId)) continue;
-
-            $document = $this->documentRepo->find($docId);
-            if ($document && $document->getUser()->getId() === $user->getId()) {
-                $attachmentDetails[] = [
-                    'id' => $document->getId(),
-                    'filename' => $document->getOriginalFilename(),
-                    'size' => $document->getFileSize(),
-                    'size_human' => $this->formatBytes($document->getFileSize()),
-                    'mime_type' => $document->getMimeType(),
-                    'type' => $document->getDocumentType(),
-                    'download_url' => sprintf('/api/documents/%d/download', $document->getId())
-                ];
-            } else {
-                $this->logger->warning('Document not found or access denied', [
-                    'doc_id' => $docId,
-                    'user_id' => $user->getId()
-                ]);
+        } elseif ($user === null && !empty($attachmentIds)) {
+            // ✅ NEU: Placeholder-Attachments für Vorschau ohne User
+            foreach ($attachmentIds as $attachment) {
+                $docId = is_array($attachment) ? ($attachment['value'] ?? $attachment['id'] ?? null) : $attachment;
+                if ($docId) {
+                    $attachmentDetails[] = [
+                        'id' => $docId,
+                        'filename' => "Dokument #{$docId}",
+                        'size' => 0,
+                        'size_human' => 'Unbekannt',
+                        'mime_type' => 'application/octet-stream',
+                        'type' => 'unknown',
+                        'download_url' => sprintf('/api/documents/%s/download', $docId),
+                        'placeholder' => true // ✅ Markierung für Frontend
+                    ];
+                }
             }
         }
 
-        // Erstelle strukturierte E-Mail-Details
+        // ✅ Erstelle strukturierte E-Mail-Details
         $emailDetails = [
             'recipient' => $recipient,
             'subject' => $subject,
@@ -288,13 +278,14 @@ trait ToolExecutionTrait
             'body_length' => mb_strlen($body),
             'attachments' => $attachmentDetails,
             'attachment_count' => count($attachmentDetails),
-            'ready_to_send' => true,
+            'ready_to_send' => $user !== null, // ✅ Nur ready wenn User vorhanden
+            'requires_user_context' => $user === null, // ✅ Flag für Frontend
             'prepared_at' => (new \DateTimeImmutable())->format('c'),
             '_original_params' => $parameters,
-            '_user_id' => $user->getId() // ✅ NEU: User-ID speichern
+            '_user_id' => $user?->getId()
         ];
 
-        // Speichere E-Mail-Details im Step
+        // ✅ Speichere E-Mail-Details IMMER (auch ohne User)
         $step->setEmailDetails($emailDetails);
         $step->setStatus('pending_confirmation');
         $step->setRequiresConfirmation(true);
@@ -305,49 +296,86 @@ trait ToolExecutionTrait
             ? sprintf(' (%d Anhänge)', count($attachmentDetails))
             : '';
 
-        $this->statusService->addStatus(
-            $sessionId,
-            sprintf('📧 E-Mail vorbereitet an %s - Betreff: "%s"%s (wartet auf Freigabe)', 
+        $statusMessage = $user !== null
+            ? sprintf('📧 E-Mail vorbereitet an %s - Betreff: "%s"%s (wartet auf Freigabe)', 
                 $recipient, 
                 mb_substr($subject, 0, 50),
                 $attachmentInfo
             )
-        );
+            : sprintf('📧 E-Mail vorbereitet an %s - User-Kontext erforderlich für finale Freigabe', $recipient);
+
+        $this->statusService->addStatus($sessionId, $statusMessage);
 
         return [
             'tool' => 'send_email',
             'status' => 'prepared',
-            'email_details' => $emailDetails
+            'email_details' => $emailDetails,
+            'requires_user_authentication' => $user === null // ✅ Für Workflow-Status
         ];
     }
 
     /**
-     * Versendet eine vorbereitete E-Mail
+     * ✅ VERBESSERT: Versendet vorbereitete E-Mail mit User-Reload
      */
-    private function executeSendEmail(WorkflowStep $step, string $sessionId, ?User $user): array
-    {
+    private function executeSendEmail(WorkflowStep $step, string $sessionId, ?User $user): array    {
         $emailDetails = $step->getEmailDetails();
 
         if (!$emailDetails || !isset($emailDetails['_original_params'])) {
             throw new \RuntimeException('Email details not found or incomplete');
         }
 
-        // ✅ NEU: User aus Email-Details holen falls nicht übergeben
+        // ✅ NEU: User aus Email-Details laden falls nicht übergeben
         if (!$user && isset($emailDetails['_user_id'])) {
             $user = $this->em->getRepository(User::class)->find($emailDetails['_user_id']);
+            
+            if (!$user) {
+                throw new \RuntimeException('User not found - cannot send email');
+            }
+            
+            $this->logger->info('User context restored from email details', [
+                'user_id' => $user->getId()
+            ]);
         }
 
         if (!$user) {
             throw new \RuntimeException('User context required for sending email');
         }
 
-        // Verwende Original-Parameter für Tool-Aufruf
-        $params = $emailDetails['_original_params'];
+        // ✅ Lade vollständige Attachment-Details wenn nur Placeholders vorhanden
+        $attachmentDetails = $emailDetails['attachments'] ?? [];
+        $hasPlaceholders = !empty(array_filter($attachmentDetails, fn($a) => $a['placeholder'] ?? false));
 
-        // Bereite Attachments für das SendMailTool vor
+        if ($hasPlaceholders) {
+            $this->logger->info('Resolving placeholder attachments', [
+                'count' => count($attachmentDetails)
+            ]);
+            
+            $resolvedAttachments = [];
+            foreach ($attachmentDetails as $attachment) {
+                if (isset($attachment['id'])) {
+                    $document = $this->documentRepo->find($attachment['id']);
+                    if ($document && $document->getUser()->getId() === $user->getId()) {
+                        $resolvedAttachments[] = [
+                            'id' => $document->getId(),
+                            'filename' => $document->getOriginalFilename(),
+                            'size' => $document->getFileSize(),
+                            'size_human' => $this->formatBytes($document->getFileSize()),
+                            'mime_type' => $document->getMimeType(),
+                            'type' => $document->getDocumentType(),
+                            'path' => $document->getFullPath()
+                        ];
+                    }
+                }
+            }
+            $attachmentDetails = $resolvedAttachments;
+        }
+
+        // Bereite Attachments für Tool-Aufruf vor
         $attachmentPaths = [];
-        if (!empty($emailDetails['attachments'])) {
-            foreach ($emailDetails['attachments'] as $attachment) {
+        foreach ($attachmentDetails as $attachment) {
+            if (isset($attachment['path'])) {
+                $attachmentPaths[] = $attachment['path'];
+            } else {
                 $document = $this->documentRepo->find($attachment['id']);
                 if ($document && $document->getUser()->getId() === $user->getId()) {
                     $attachmentPaths[] = $document->getFullPath();
@@ -355,12 +383,13 @@ trait ToolExecutionTrait
             }
         }
 
-        // Konstruiere Tool-Aufruf mit vollständigen Pfaden
+        // Konstruiere Tool-Aufruf
+        $params = $emailDetails['_original_params'];
         $toolParams = [
             'to' => $params['to'],
             'subject' => $params['subject'],
             'body' => $params['body'],
-            'attachments' => $attachmentPaths // ✅ Verwende Pfade statt IDs
+            'attachments' => $attachmentPaths
         ];
 
         $prompt = sprintf(

@@ -162,8 +162,12 @@ final class SendMailTool
      * Bereitet die E-Mail-Details (ohne User/SMTP-Check) vor.
      * Kann auch von der WorkflowExecutor::prepareSendMailDetails verwendet werden.
      */
+    // In src/Tool/SendMailTool.php, Methode getPreparedEmailDetails:
+
     public function getPreparedEmailDetails(string $to, string $subject, string $body, string $attachmentsJson, ?User $user): array
     {
+        $this->logger->debug('Starting getPreparedEmailDetails', ['user_present' => (bool)$user, 'attachments_json_length' => strlen($attachmentsJson)]);
+        
         // 1. E-Mail erstellen (ohne Absender, da dieser erst beim Senden bekannt ist)
         $formattedBody = nl2br(htmlspecialchars($body, ENT_QUOTES, 'UTF-8'));
 
@@ -171,32 +175,36 @@ final class SendMailTool
             ->to(...explode(',', str_replace(' ', '', $to)))
             ->subject($subject)
             ->html($formattedBody);
-
-        // 2. Anhänge verarbeiten (NUR wenn vorhanden)
+        
+        // 2. Anhänge Metadaten verarbeiten (KEIN Anhang-Hinzufügen zum Email-Objekt)
         $attachmentInfo = [];
         if (!empty(trim($attachmentsJson))) {
-            // ACHTUNG: processAttachments benötigt den User, um Dokumente zu laden!
-            // Wenn $user null ist, werden hier keine Anhänge geladen.
-            if ($user) {
-                 $attachmentInfo = $this->processAttachments($email, $attachmentsJson, $user);
-            } else {
-                 // Debugging-Hinweis, wenn Anhänge angegeben sind, aber der User fehlt
-                 $this->logger->debug('Cannot process attachments during preparation because user context is missing.');
-                 // Wir müssen hier die Roh-Attachment-Daten zurückgeben, damit der User sie im Frontend sieht.
-                 // Dies ist ein Workaround, da processAttachments File-Objekte zum Email-Objekt hinzufügt,
-                 // was in diesem Zustand schwierig ist.
-                 try {
-                    $attachmentData = json_decode($attachmentsJson, true);
-                    if (is_array($attachmentData)) {
-                       $attachmentInfo = array_map(function($a) {
-                           return ['type' => $a['type'] ?? 'document_id', 'value' => (string)$a['value']];
-                       }, $attachmentData);
-                    }
-                 } catch (\Exception $e) { /* ignore json parse error */ }
-
+            
+            // Lade die Attachment-Metadaten (nur für die Vorschau)
+            try {
+                $attachmentData = json_decode($attachmentsJson, true);
+                if (is_array($attachmentData)) {
+                    // Normalisiere die Metadaten
+                    $attachmentInfo = array_map(function($a) {
+                        // Wenn es bereits das vollständige Format ist, verwende es.
+                        if (isset($a['filename'])) {
+                            return $a;
+                        }
+                        // Ansonsten, normales Roh-Format (wird später in processAttachments aufgelöst)
+                        return ['type' => $a['type'] ?? 'document_id', 'value' => (string)$a['value']];
+                    }, $attachmentData);
+                }
+            } catch (\Exception $e) { 
+                $this->logger->debug('JSON error parsing attachment metadata', ['error' => $e->getMessage()]);
             }
+            
+            // HIER FEHLTE DER SCHLIESSENDE BLOCK IN DER VORHERIGEN ANTWORT.
+            // Die Logik von processAttachments wurde komplett in den Sende-Block in __invoke verschoben.
+            // Daher ist hier kein weiterer Code für Anhänge nötig.
         }
         
+        $this->logger->debug('Finished getPreparedEmailDetails', ['email_object_hash' => spl_object_hash($email), 'attachments_metadata_count' => count($attachmentInfo)]);
+
         // Da die Anhänge direkt zum $email Objekt hinzugefügt werden,
         // geben wir das Email-Objekt selbst und die Metadaten zurück.
         return [
