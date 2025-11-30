@@ -10,9 +10,11 @@ use App\Entity\UserDocument;
 use App\Entity\WorkflowStep;
 use App\Repository\WorkflowRepository;
 use App\Service\ToolCapabilityChecker;
+use App\Service\Workflow\DynamicWorkflowPlanner;
+use App\Service\Workflow\EnhancedWorkflowExecutor;
 use App\Service\WorkflowEngine;
 use App\Service\Workflow\WorkflowExecutor;
-use App\Service\Workflow\WorkflowPlanner;
+
 use Doctrine\ORM\EntityManagerInterface;
 use FontLib\Table\Type\prep;
 use OpenApi\Attributes as OA;
@@ -31,11 +33,13 @@ class WorkflowController extends AbstractController
     public function __construct(
         private WorkflowEngine $workflowEngine,
         private WorkflowRepository $workflowRepo,
-        private WorkflowPlanner $workflowPlanner,
+        
         private EntityManagerInterface $em,
         private LoggerInterface $logger,
         private WorkflowExecutor $workflowExecutor,
         private ToolCapabilityChecker $capabilityChecker,
+        private DynamicWorkflowPlanner $dynamicPlanner,  
+        private EnhancedWorkflowExecutor $enhancedExecutor
     ) {}
 
     /**
@@ -85,7 +89,7 @@ class WorkflowController extends AbstractController
         }
         try {
             // Erstelle Workflow-ENTWURF (nicht ausgeführt)
-            $workflow = $this->workflowPlanner->createWorkflowFromIntent($intent, $sessionId);
+            $workflow = $this->dynamicPlanner->createAdaptiveWorkflow($intent, $sessionId);
 
             if ($requiresApproval) {
                 $workflow->requireApproval();
@@ -154,7 +158,7 @@ class WorkflowController extends AbstractController
             $this->em->flush();
 
             // Starte Workflow JETZT
-            $this->workflowEngine->executeWorkflow($workflow, $user);
+            $this->enhancedExecutor->executeWorkflow($workflow, $user);
 
             return $this->json([
                 'status' => 'approved',

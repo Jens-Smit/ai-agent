@@ -10,11 +10,10 @@ use App\Repository\UserDocumentRepository;
 use Symfony\AI\Agent\Toolbox\Attribute\AsTool;
 use Symfony\Bundle\SecurityBundle\Security;
 use Psr\Log\LoggerInterface;
-use Throwable; // Importiere die Throwable-Klasse, um alle Fehler abzufangen
 
 #[AsTool(
     name: 'user_document_list',
-    description: 'Listet alle hochgeladenen Dokumente des Benutzers auf. Optional kann nach Kategorie gefiltert werden (z.B. "resume", "contracts", "other"). Gibt Name, Typ, Größe und Upload-Datum aller Dokumente zurück.'
+    description: 'Lists all non-secret documents of the current user. Can filter by category (e.g., "resume", "cover_letter", "certificate"). Secret documents (isSecret=true) are automatically excluded for privacy. Returns: document ID, filename, display name, category, file size, creation date, and whether text was extracted.'
 )]
 final class UserDocumentListTool
 {
@@ -25,89 +24,101 @@ final class UserDocumentListTool
     ) {}
 
     /**
-     * Listet alle Dokumente auf, optional gefiltert nach Kategorie
-     * * @param string $category Optional: Kategorie zum Filtern (z.B. 'resume', 'contracts', 'other')
+     * Listet alle nicht-geheimen Dokumente des Users auf
+     * 
+     * @param string $category Optional: Filter nach Kategorie (z.B. "resume", "cover_letter")
+     * @param bool $includeSecret Optional: Auch geheime Dokumente einbeziehen (default: false)
      */
-    public function __invoke(string $category = ''): array
+    public function __invoke(string $category = '', bool $includeSecret = false): array
     {
-        // 1. Benutzer-Validierung und Logging
+        $this->logger->info('UserDocumentListTool invoked', [
+            'category' => $category ?: 'all',
+            'include_secret' => $includeSecret
+        ]);
+
         $user = $this->security->getUser();
         
         if (!$user instanceof User) {
-            $this->logger->warning('UserDocumentListTool called without authenticated User.');
+            $this->logger->warning('Unauthenticated access attempt to UserDocumentListTool');
             return [
                 'success' => false,
                 'message' => 'Benutzer nicht authentifiziert'
             ];
         }
 
-        $userId = $user->getId();
-        $this->logger->info('UserDocumentListTool: Start listing documents.', [
-            'user_id' => $userId, 
-            'requested_category' => $category ?: 'all'
-        ]);
-
         try {
-            // 2. Datenbank-Abfrage
-            $documents = empty($category)
-                ? $this->documentRepo->findByUser($user)
-                : $this->documentRepo->findByUserAndCategory($user, $category);
-            
-            $count = count($documents);
-            $this->logger->info('UserDocumentListTool: Database query successful.', [
-                'user_id' => $userId,
-                'count' => $count
-            ]);
-
-            // 3. Daten-Mapping und Verarbeitung
-            $mappedData = array_map(function ($doc) {
-                // Zusätzlicher interner Log für die erfolgreiche Mappung
-                $this->logger->debug('UserDocumentListTool: Mapping document.', ['doc_id' => $doc->getId()]);
-
-                // HINWEIS: Prüfe hier, ob $doc->getCreatedAt() null sein kann.
-                // Wenn ja, muss es vor dem Aufruf von format() geprüft werden.
-                // Beispiel: $doc->getCreatedAt() ? $doc->getCreatedAt()->format('Y-m-d H:i:s') : null
+            // 🔒 Standardmäßig nur nicht-geheime Dokumente
+            if (!empty($category)) {
+                $documents = $this->documentRepo->findByUserAndCategory($user, $category);
                 
+                $this->logger->debug('Documents filtered by category', [
+                    'user_id' => $user->getId(),
+                    'category' => $category,
+                    'count' => count($documents)
+                ]);
+            } else {
+                $documents = $this->documentRepo->findNonSecretByUser($user);
+                
+                $this->logger->debug('All non-secret documents loaded', [
+                    'user_id' => $user->getId(),
+                    'count' => count($documents)
+                ]);
+            }
+
+            // 🔓 Optional: Auch geheime Dokumente einbeziehen (für Admin/Debug)
+            if ($includeSecret && empty($documents)) {
+                $this->logger->info('Including secret documents (fallback)', [
+                    'user_id' => $user->getId()
+                ]);
+                
+                $documents = !empty($category)
+                    ? $this->documentRepo->findBy(['user' => $user, 'category' => $category])
+                    : $this->documentRepo->findAllByUser($user);
+            }
+
+            $result = array_map(function($doc) {
                 return [
                     'id' => $doc->getId(),
-                    'name' => $doc->getDisplayName(),
                     'filename' => $doc->getOriginalFilename(),
-                    'type' => $doc->getDocumentType(),
+                    'display_name' => $doc->getDisplayName(),
                     'category' => $doc->getCategory(),
-                    'size' => $doc->getFileSize(),
-                    'tags' => $doc->getTags(),
-                    'uploaded_at' => $doc->getCreatedAt() ? $doc->getCreatedAt()->format('Y-m-d H:i:s') : null, // Added null check
-                    'storage_path' => $doc->getStoragePath(),
+                    'mime_type' => $doc->getMimeType(),
+                    'type' => $doc->getDocumentType(),
+                    'file_size' => $doc->getFileSize(),
+                    'created_at' => $doc->getCreatedAt()->format('Y-m-d H:i:s'),
+                    'is_secret' => $doc->isSecret(),
+                    'has_extracted_text' => !empty($doc->getExtractedText()),
+                    'description' => $doc->getDescription(),
+                    'tags' => $doc->getTags()
                 ];
             }, $documents);
 
-            // 4. Erfolgreiche Rückgabe
-            $this->logger->info('UserDocumentListTool: Successfully finished.', ['user_id' => $userId]);
+            $this->logger->info('Documents listed successfully', [
+                'user_id' => $user->getId(),
+                'category' => $category ?: 'all',
+                'count' => count($result),
+                'includes_secret' => $includeSecret
+            ]);
 
             return [
                 'success' => true,
-                'message' => sprintf('%d Dokument(e) gefunden', $count),
-                'data' => $mappedData
+                'message' => sprintf('%d Dokument(e) gefunden', count($result)),
+                'count' => count($result),
+                'category_filter' => $category ?: null,
+                'includes_secret' => $includeSecret,
+                'data' => $result
             ];
 
-        } catch (Throwable $e) {
-            // 5. Fehlerbehandlung und Logging
-            $errorId = uniqid('DOC_ERR_');
-            $this->logger->error('UserDocumentListTool: CRITICAL FAILURE!', [
-                'error_id' => $errorId,
-                'user_id' => $userId,
-                'message' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
-                'category' => $category
+        } catch (\Exception $e) {
+            $this->logger->error('Failed to list documents', [
+                'user_id' => $user->getId(),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
-
-            // Strukturierte Fehlerantwort an den Agenten zurückgeben
+            
             return [
                 'success' => false,
-                'message' => 'Ein kritischer interner Fehler ist bei der Dokumentensuche aufgetreten. Bitte überprüfen Sie das Server-Log. (Ref: ' . $errorId . ')',
-                'error_type' => get_class($e)
+                'message' => 'Fehler beim Laden der Dokumente: ' . $e->getMessage()
             ];
         }
     }

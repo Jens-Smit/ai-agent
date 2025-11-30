@@ -53,7 +53,18 @@ class UserDocumentRepository extends ServiceEntityRepository
             ->getQuery()
             ->getResult();
     }
-
+    public function findByUserAndCategory(User $user, string $category): array
+    {
+        return $this->createQueryBuilder('d')
+            ->where('d.user = :user')
+            ->andWhere('d.category = :category')
+            ->andWhere('d.isSecret = false')  // ✅ Nur nicht-geheime Dokumente
+            ->setParameter('user', $user)
+            ->setParameter('category', $category)
+            ->orderBy('d.createdAt', 'DESC')
+            ->getQuery()
+            ->getResult();
+    }
     /**
      * Findet Dokumente nach Tags
      */
@@ -72,7 +83,48 @@ class UserDocumentRepository extends ServiceEntityRepository
             ->getQuery()
             ->getResult();
     }
+    /**
+     * Findet alle nicht-geheimen Dokumente eines Users
+     */
+    public function findNonSecretByUser(User $user): array
+    {
+        return $this->createQueryBuilder('d')
+            ->where('d.user = :user')
+            ->andWhere('d.isSecret = false')  // ✅ Nur nicht-geheime Dokumente
+            ->setParameter('user', $user)
+            ->orderBy('d.createdAt', 'DESC')
+            ->getQuery()
+            ->getResult();
+    }
 
+    /**
+     * Findet ALLE Dokumente eines Users (inkl. geheime) - für Admin/Debug
+     */
+    public function findAllByUser(User $user): array
+    {
+        return $this->createQueryBuilder('d')
+            ->where('d.user = :user')
+            ->setParameter('user', $user)
+            ->orderBy('d.createdAt', 'DESC')
+            ->getQuery()
+            ->getResult();
+    }
+
+    /**
+     * Zählt nicht-geheime Dokumente nach Kategorie
+     */
+    public function countByUserAndCategory(User $user, string $category): int
+    {
+        return (int) $this->createQueryBuilder('d')
+            ->select('COUNT(d.id)')
+            ->where('d.user = :user')
+            ->andWhere('d.category = :category')
+            ->andWhere('d.isSecret = false')
+            ->setParameter('user', $user)
+            ->setParameter('category', $category)
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
     /**
      * Sucht in Dokumenten (Name, Beschreibung, extrahierter Text)
      */

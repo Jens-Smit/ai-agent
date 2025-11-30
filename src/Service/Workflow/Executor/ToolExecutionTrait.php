@@ -7,7 +7,6 @@ namespace App\Service\Workflow\Executor;
 
 use App\Entity\User;
 use App\Entity\WorkflowStep;
-use App\Tool\CompanyCareerContactFinderTool;
 use Symfony\AI\Platform\Message\Message;
 use Symfony\AI\Platform\Message\MessageBag;
 
@@ -15,12 +14,11 @@ trait ToolExecutionTrait
 {
     /**
      * Führt einen Tool-Call aus
-     * ✅ FIXED: Robustes User-Context-Handling
      */
     private function executeToolCall(WorkflowStep $step, array $context, string $sessionId, ?User $user): array
     {
         $toolName = $step->getToolName();
-        $parameters = $this->resolveContextPlaceholders($step->getToolParameters(), $context);
+        $parameters = $step->getToolParameters(); // ✅ Bereits aufgelöst in executeStep
 
         $this->logger->info('Executing tool call', [
             'tool' => $toolName,
@@ -29,7 +27,7 @@ trait ToolExecutionTrait
             'has_user' => $user !== null
         ]);
 
-        // ✅ NEUE LOGIK: send_email ohne User → Vorbereitung statt Fehler
+        // ✅ E-Mail-Vorbereitung
         if ($toolName === 'send_email' || $toolName === 'SendMailTool') {
             return $this->prepareSendMailDetails($step, $parameters, $sessionId, $context, $user);
         }
@@ -173,9 +171,6 @@ trait ToolExecutionTrait
         ));
     }
 
-    /**
-     * Prüft, ob das ContactFinder-Ergebnis erfolgreich ist
-     */
     private function isContactFinderSuccessful(array $result): bool
     {
         if (isset($result['success']) && $result['success'] === true) {
@@ -186,7 +181,7 @@ trait ToolExecutionTrait
     }
 
     /**
-     * ✅ VERBESSERT: Bereitet E-Mail vor - KEIN Fehler wenn User fehlt
+     * Bereitet E-Mail vor - KEIN Fehler wenn User fehlt
      */
     private function prepareSendMailDetails(
         WorkflowStep $step,
@@ -200,7 +195,6 @@ trait ToolExecutionTrait
         $body = $parameters['body'] ?? '';
         $attachmentIds = [];
 
-        // Parse attachments
         if (isset($parameters['attachments'])) {
             $attachmentsParam = $parameters['attachments'];
             
@@ -222,7 +216,6 @@ trait ToolExecutionTrait
             'has_user' => $user !== null
         ]);
 
-        // ✅ KRITISCH: Attachment-Details nur laden wenn User vorhanden
         $attachmentDetails = [];
         if ($user !== null && !empty($attachmentIds)) {
             foreach ($attachmentIds as $attachment) {
@@ -251,7 +244,6 @@ trait ToolExecutionTrait
                 }
             }
         } elseif ($user === null && !empty($attachmentIds)) {
-            // ✅ NEU: Placeholder-Attachments für Vorschau ohne User
             foreach ($attachmentIds as $attachment) {
                 $docId = is_array($attachment) ? ($attachment['value'] ?? $attachment['id'] ?? null) : $attachment;
                 if ($docId) {
@@ -263,13 +255,12 @@ trait ToolExecutionTrait
                         'mime_type' => 'application/octet-stream',
                         'type' => 'unknown',
                         'download_url' => sprintf('/api/documents/%s/download', $docId),
-                        'placeholder' => true // ✅ Markierung für Frontend
+                        'placeholder' => true
                     ];
                 }
             }
         }
 
-        // ✅ Erstelle strukturierte E-Mail-Details
         $emailDetails = [
             'recipient' => $recipient,
             'subject' => $subject,
@@ -278,14 +269,13 @@ trait ToolExecutionTrait
             'body_length' => mb_strlen($body),
             'attachments' => $attachmentDetails,
             'attachment_count' => count($attachmentDetails),
-            'ready_to_send' => $user !== null, // ✅ Nur ready wenn User vorhanden
-            'requires_user_context' => $user === null, // ✅ Flag für Frontend
+            'ready_to_send' => $user !== null,
+            'requires_user_context' => $user === null,
             'prepared_at' => (new \DateTimeImmutable())->format('c'),
             '_original_params' => $parameters,
             '_user_id' => $user?->getId()
         ];
 
-        // ✅ Speichere E-Mail-Details IMMER (auch ohne User)
         $step->setEmailDetails($emailDetails);
         $step->setStatus('pending_confirmation');
         $step->setRequiresConfirmation(true);
@@ -310,21 +300,21 @@ trait ToolExecutionTrait
             'tool' => 'send_email',
             'status' => 'prepared',
             'email_details' => $emailDetails,
-            'requires_user_authentication' => $user === null // ✅ Für Workflow-Status
+            'requires_user_authentication' => $user === null
         ];
     }
 
     /**
-     * ✅ VERBESSERT: Versendet vorbereitete E-Mail mit User-Reload
+     * Versendet vorbereitete E-Mail mit User-Reload
      */
-    private function executeSendEmail(WorkflowStep $step, string $sessionId, ?User $user): array    {
+    private function executeSendEmail(WorkflowStep $step, string $sessionId, ?User $user): array
+    {
         $emailDetails = $step->getEmailDetails();
 
         if (!$emailDetails || !isset($emailDetails['_original_params'])) {
             throw new \RuntimeException('Email details not found or incomplete');
         }
 
-        // ✅ NEU: User aus Email-Details laden falls nicht übergeben
         if (!$user && isset($emailDetails['_user_id'])) {
             $user = $this->em->getRepository(User::class)->find($emailDetails['_user_id']);
             
@@ -341,7 +331,6 @@ trait ToolExecutionTrait
             throw new \RuntimeException('User context required for sending email');
         }
 
-        // ✅ Lade vollständige Attachment-Details wenn nur Placeholders vorhanden
         $attachmentDetails = $emailDetails['attachments'] ?? [];
         $hasPlaceholders = !empty(array_filter($attachmentDetails, fn($a) => $a['placeholder'] ?? false));
 
@@ -370,7 +359,6 @@ trait ToolExecutionTrait
             $attachmentDetails = $resolvedAttachments;
         }
 
-        // Bereite Attachments für Tool-Aufruf vor
         $attachmentPaths = [];
         foreach ($attachmentDetails as $attachment) {
             if (isset($attachment['path'])) {
@@ -383,7 +371,6 @@ trait ToolExecutionTrait
             }
         }
 
-        // Konstruiere Tool-Aufruf
         $params = $emailDetails['_original_params'];
         $toolParams = [
             'to' => $params['to'],
@@ -428,29 +415,23 @@ trait ToolExecutionTrait
     }
 
     /**
-     * Findet unaufgelöste Platzhalter in Daten
+     * ✅ SIMPLIFIED: Nutzt ContextResolver wenn verfügbar, sonst Legacy-Methode
      */
-    private function findUnresolvedPlaceholders(mixed $data): array
+    private function resolveContextPlaceholders(mixed $data, array $context): mixed
     {
-        $unresolved = [];
-
-        if (is_string($data)) {
-            if (preg_match_all('/\{\{([^}]+)\}\}/', $data, $matches)) {
-                $unresolved = array_merge($unresolved, $matches[0]);
-            }
-        } elseif (is_array($data)) {
-            foreach ($data as $value) {
-                $unresolved = array_merge($unresolved, $this->findUnresolvedPlaceholders($value));
-            }
+        // ✅ Nutze ContextResolver aus Parent-Class wenn vorhanden
+        if (isset($this->contextResolver)) {
+            return $this->contextResolver->resolveAll($data, $context);
         }
 
-        return array_unique($unresolved);
+        // Fallback: Legacy-Methode (für Kompatibilität)
+        return $this->resolveContextPlaceholdersLegacy($data, $context);
     }
 
     /**
-     * Löst Context-Platzhalter in Daten auf
+     * Legacy Platzhalter-Auflösung (Fallback)
      */
-    private function resolveContextPlaceholders(mixed $data, array $context): mixed
+    private function resolveContextPlaceholdersLegacy(mixed $data, array $context): mixed
     {
         if (is_string($data)) {
             return preg_replace_callback(
@@ -458,86 +439,40 @@ trait ToolExecutionTrait
                 function ($matches) use ($context) {
                     $path = trim($matches[1]);
                     
-                    // Unterstütze Pipe-Fallbacks: {{step_2.result.company_name|default_value}}
                     if (str_contains($path, '|')) {
                         $paths = explode('|', $path);
                         foreach ($paths as $fallbackPath) {
                             $value = $this->resolveSinglePath(trim($fallbackPath), $context);
                             if ($value !== null) {
-                                $this->logger->debug('Resolved placeholder with fallback', [
-                                    'placeholder' => $matches[0],
-                                    'path' => trim($fallbackPath),
-                                    'value_preview' => substr((string)$value, 0, 100)
-                                ]);
                                 return $value;
                             }
                         }
-                        
-                        $this->logger->warning('All fallback paths failed', [
-                            'placeholder' => $matches[0],
-                            'tried_paths' => $paths,
-                            'available_context' => array_keys($context)
-                        ]);
-                        
                         return $matches[0];
                     }
                     
                     $value = $this->resolveSinglePath($path, $context);
-                    
-                    if ($value !== null) {
-                        $this->logger->debug('Resolved placeholder', [
-                            'placeholder' => $matches[0],
-                            'path' => $path,
-                            'value_preview' => substr((string)$value, 0, 100)
-                        ]);
-                        return $value;
-                    }
-                    
-                    $this->logger->warning('Placeholder unresolved', [
-                        'placeholder' => $matches[0],
-                        'path' => $path,
-                        'available_context' => array_keys($context)
-                    ]);
-                    
-                    return $matches[0];
+                    return $value ?? $matches[0];
                 },
                 $data
             );
         }
 
         if (is_array($data)) {
-            return array_map(fn($item) => $this->resolveContextPlaceholders($item, $context), $data);
+            return array_map(fn($item) => $this->resolveContextPlaceholdersLegacy($item, $context), $data);
         }
 
         return $data;
     }
 
-    /**
-     * Löst einen einzelnen Pfad im Context auf
-     */
     private function resolveSinglePath(string $path, array $context): mixed
     {
         $parts = preg_split('/[\.\[\]]+/', $path, -1, PREG_SPLIT_NO_EMPTY);
         $value = $context;
         
         foreach ($parts as $key) {
-            if (is_array($value)) {
-                if (isset($value[$key])) {
-                    $value = $value[$key];
-                } else {
-                    $this->logger->debug('Context path not found', [
-                        'path' => $path,
-                        'missing_key' => $key,
-                        'available_keys' => array_keys($value)
-                    ]);
-                    return null;
-                }
+            if (is_array($value) && isset($value[$key])) {
+                $value = $value[$key];
             } else {
-                $this->logger->debug('Cannot traverse non-array', [
-                    'path' => $path,
-                    'key' => $key,
-                    'value_type' => gettype($value)
-                ]);
                 return null;
             }
         }
@@ -549,9 +484,6 @@ trait ToolExecutionTrait
         return json_encode($value, JSON_UNESCAPED_UNICODE);
     }
 
-    /**
-     * Formatiert Bytes in menschenlesbare Form
-     */
     private function formatBytes(int $bytes): string
     {
         $units = ['B', 'KB', 'MB', 'GB'];

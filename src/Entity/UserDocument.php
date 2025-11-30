@@ -58,6 +58,9 @@ class UserDocument
     #[ORM\Column(type: 'bigint')]
     private int $fileSize;
 
+    #[ORM\Column(type: 'boolean', options: ['default' => false])]
+    private bool $isSecret = false;
+
     #[ORM\Column(type: 'string', length: 64)]
     private string $checksum; // SHA-256 Hash
 
@@ -178,7 +181,25 @@ class UserDocument
         $this->fileSize = $fileSize;
         return $this;
     }
+    public function isSecret(): bool
+    {
+        return $this->isSecret;
+    }
 
+    public function setIsSecret(bool $isSecret): self
+    {
+        $this->isSecret = $isSecret;
+        
+        return $this;
+    }
+
+    /**
+     * Alias für bessere Lesbarkeit in Queries
+     */
+    public function getIsSecret(): bool
+    {
+        return $this->isSecret;
+    }
     public function getChecksum(): string
     {
         return $this->checksum;

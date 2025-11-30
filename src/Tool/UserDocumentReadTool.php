@@ -15,7 +15,7 @@ use Psr\Log\LoggerInterface;
 
 #[AsTool(
     name: 'user_document_read',
-    description: 'Liest den Inhalt eines hochgeladenen Dokuments und extrahiert den Text. Unterstützt PDFs, Word-Dokumente (.docx, .doc), Textdateien und mehr. Gibt den kompletten Textinhalt zurück. Ideal für: Dokument analysieren, Zusammenfassungen erstellen, Inhalte weiterverarbeiten.'
+    description: 'Liest den Inhalt eines hochgeladenen Dokuments und extrahiert den Text. Unterstützt PDFs, Word-Dokumente (.docx, .doc), Textdateien und mehr. Gibt den kompletten Textinhalt zurück. Ideal für: Dokument analysieren, Zusammenfassungen erstellen, Inhalte weiterverarbeiten. WICHTIG: Geheime Dokumente (isSecret=true) können nicht gelesen werden.'
 )]
 final class UserDocumentReadTool
 {
@@ -30,11 +30,13 @@ final class UserDocumentReadTool
      * Liest ein Dokument und extrahiert den Textinhalt
      * 
      * @param string $identifier Dokumentname oder ID (z.B. "Lebenslauf" oder "42")
+     * @param bool $allowSecret Optional: Erlaube Zugriff auf geheime Dokumente (default: false)
      */
-    public function __invoke(string $identifier): array
+    public function __invoke(string $identifier, bool $allowSecret = false): array
     {
         $this->logger->info('UserDocumentReadTool invoked', [
             'identifier' => $identifier,
+            'allow_secret' => $allowSecret
         ]);
 
         $user = $this->security->getUser();
@@ -55,7 +57,7 @@ final class UserDocumentReadTool
         ]);
 
         // Suche nach Name oder ID
-        $doc = $this->findDocument($user, $identifier);
+        $doc = $this->findDocument($user, $identifier, $allowSecret);
         
         if (!$doc) {
             $this->logger->warning('Document not found', [
@@ -63,11 +65,11 @@ final class UserDocumentReadTool
                 'identifier' => $identifier,
             ]);
 
-            // Liste verfügbare Dokumente zur Hilfe
-            $availableDocs = $this->documentRepo->findByUser($user);
+            // Liste verfügbare nicht-geheime Dokumente zur Hilfe
+            $availableDocs = $this->documentRepo->findNonSecretByUser($user);
             $docNames = array_map(fn($d) => $d->getDisplayName(), $availableDocs);
             
-            $this->logger->info('Available documents for user', [
+            $this->logger->info('Available non-secret documents for user', [
                 'user_id' => $user->getId(),
                 'documents' => $docNames,
             ]);
@@ -80,12 +82,28 @@ final class UserDocumentReadTool
             ];
         }
 
+        // 🔒 Prüfe ob Dokument geheim ist
+        if ($doc->isSecret() && !$allowSecret) {
+            $this->logger->warning('Attempt to read secret document without permission', [
+                'user_id' => $user->getId(),
+                'document_id' => $doc->getId(),
+                'document_name' => $doc->getDisplayName()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => "Zugriff verweigert: Dokument '{$doc->getDisplayName()}' ist als geheim markiert",
+                'hint' => 'Dieses Dokument kann nicht vom Agent gelesen werden'
+            ];
+        }
+
         $this->logger->info('Document found', [
             'document_id' => $doc->getId(),
             'name' => $doc->getDisplayName(),
             'filename' => $doc->getOriginalFilename(),
             'type' => $doc->getDocumentType(),
             'size' => $doc->getFileSize(),
+            'is_secret' => $doc->isSecret()
         ]);
 
         // Prüfe ob bereits extrahierter Text vorhanden ist
@@ -108,7 +126,8 @@ final class UserDocumentReadTool
                     'type' => $doc->getDocumentType(),
                     'size' => $doc->getFileSize(),
                     'content' => $extractedText,
-                    'metadata' => $doc->getMetadata()
+                    'metadata' => $doc->getMetadata(),
+                    'is_secret' => $doc->isSecret()
                 ]
             ];
         }
@@ -152,7 +171,8 @@ final class UserDocumentReadTool
                     'type' => $doc->getDocumentType(),
                     'size' => $doc->getFileSize(),
                     'content' => $content,
-                    'metadata' => $doc->getMetadata()
+                    'metadata' => $doc->getMetadata(),
+                    'is_secret' => $doc->isSecret()
                 ]
             ];
         } catch (\Exception $e) {
@@ -170,17 +190,26 @@ final class UserDocumentReadTool
         }
     }
 
-    private function findDocument(User $user, string $identifier): ?object
+    private function findDocument(User $user, string $identifier, bool $allowSecret = false): ?object
     {
         $this->logger->debug('Attempting to find document', [
             'user_id' => $user->getId(),
             'identifier' => $identifier,
+            'allow_secret' => $allowSecret
         ]);
 
         // Versuche als ID
         if (is_numeric($identifier)) {
             $doc = $this->documentRepo->find((int)$identifier);
             if ($doc && $doc->getUser() === $user) {
+                // 🔒 Prüfe Secret-Status
+                if ($doc->isSecret() && !$allowSecret) {
+                    $this->logger->debug('Document found but is secret', [
+                        'document_id' => $doc->getId(),
+                    ]);
+                    return null;
+                }
+                
                 $this->logger->debug('Document found by ID', [
                     'document_id' => $doc->getId(),
                 ]);
@@ -189,7 +218,11 @@ final class UserDocumentReadTool
         }
 
         // Versuche als Displayname (case-insensitive, partial match)
-        $docs = $this->documentRepo->findByUser($user);
+        // 🔒 Nur nicht-geheime Dokumente durchsuchen (außer allowSecret=true)
+        $docs = $allowSecret 
+            ? $this->documentRepo->findBy(['user' => $user])
+            : $this->documentRepo->findNonSecretByUser($user);
+            
         foreach ($docs as $doc) {
             if (stripos($doc->getDisplayName(), $identifier) !== false ||
                 stripos($doc->getOriginalFilename(), $identifier) !== false) {

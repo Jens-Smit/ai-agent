@@ -11,7 +11,10 @@ use App\Entity\Workflow;
 use App\Entity\WorkflowStep;
 use App\Repository\UserDocumentRepository;
 use App\Service\AgentStatusService;
+use App\Service\Workflow\Context\ContextResolver;
 use App\Service\Workflow\Executor\AnalysisAndCommunicationTrait;
+use App\Service\Workflow\Executor\SmartDecisionTrait;
+use App\Service\Workflow\Executor\SmartRetryTrait;
 use App\Service\Workflow\Executor\ToolExecutionTrait;
 use App\Tool\CompanyCareerContactFinderTool;
 use Doctrine\ORM\EntityManagerInterface;
@@ -24,7 +27,10 @@ final class WorkflowExecutor
 {
     use ToolExecutionTrait;
     use AnalysisAndCommunicationTrait;
+    use SmartRetryTrait;
+    use SmartDecisionTrait; // ✅ NEU
 
+    private ContextResolver $contextResolver;
     private int $agentFailureCount = 0;
     private bool $useFlashLite = false;
     private ?AgentInterface $flashLiteAgent = null;
