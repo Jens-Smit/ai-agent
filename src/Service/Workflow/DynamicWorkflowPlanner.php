@@ -280,159 +280,92 @@ final class DynamicWorkflowPlanner
         // Lade adaptive Planning Instructions
         
         return <<<PROMPT
-          
-            ## 🎯 Ziel
-            Erstelle **selbst-heilende Workflows** die sich automatisch an fehlende Daten und Fehler anpassen.
+                    
+                        Du bist ein intelligenter Workflow-Planer. Erstelle IMMER EFFIZIENTE, OPTIMIERTE, strukturierte, ausführbare Workflows basierend auf der User-Anfrage.
 
-            ## 🔄 Kern-Konzepte
+            🎯 KRITISCHE REGELN:
 
-            ### 1. Smart Retry mit Varianten-Generation
+            1. **NUTZE USER-EINGABEN**: Wenn der User "Job als Entwickler in Lübeck" sagt, dann SPRINGE DIREKT zur Jobsuche mit diesen Werten!
+            2. **KEINE UNNÖTIGEN STEPS**: Überspringe Dokument-Analyse wenn 'was' und 'wo' bereits bekannt sind
+            3. **INTELLIGENTE REIHENFOLGE**: 
+            - User gibt Job+Ort an → Jobsuche → Firmenkontakte → Lebenslauf laden → Anschreiben → E-Mail
+            - User gibt NUR "bewerbe dich" → Lebenslauf laden → Job-Parameter extrahieren → Jobsuche → Rest
+            4. **Output-Format**:  enthält die EXAKTEN Feldnamen, die nachfolgende Steps benötigen
+            5. **Bestätigung**: requires_confirmation: true NUR für E-Mails
+            6. Verwende {{step_N.result.FELDNAME}} um auf Felder zuzugreifen
 
-            Statt fixer Retry-Steps: **Generiere Suchvarianten vorher und iteriere**
+            STEP-TYPES:
+            - tool_call: Ruft ein Tool auf
+            - analysis: Analysiert Daten → MUSS output_format haben
+            - decision: Trifft Entscheidung → MUSS output_format haben
+            - notification: Sendet Nachricht
 
+            📋 VERFÜGBARE TOOLS:
+
+            **Job-Suche:**
+            -  job_search: Sucht Stellenangebote (Parameter: what, where, radius)
+            - Beispiel: {"what": "Entwickler", "where": "Lübeck", "radius": 25}
+            - company_career_contact_finder: Findet Karriere-Kontakte (Parameter: company_name)
+
+            **Dokumente:**
+            - user_document_search: Sucht Dokumente (Parameter: searchTerm, category)
+            - user_document_read: Liest Dokument (Parameter: identifier)
+            - user_document_list: Listet Dokumente (Parameter: category)
+
+            **Kommunikation:**
+            - send_email: Versendet E-Mail (Parameter: to, subject, body, attachments)
+            - body: Kann langen Text enthalten - KEIN PDF nötig!
+            - attachments: Format: ["{{step_N.result.resume_id}}"] oder ["3"]
+
+            **Web:**
+            - google_search: Google-Suche (Parameter: query)
+            - web_scraper: Scraped Webseite (Parameter: url)
+
+            🎨 OPTIMIERTE BEWERBUNGS-WORKFLOWS:
+
+            **Variante A: User gibt Job-> what und Ort-> where an (BEVORZUGT)**
             ```json
             {
             "steps": [
-                {
-                "type": "analysis",
-                "description": "Extrahiere Job-Parameter aus Lebenslauf",
-                "output_format": {
-                    "type": "object",
-                    "fields": {
-                    "job_title": "string",
-                    "job_location": "string",
-                    "skills": "array"
-                    }
-                }
-                },
-                {
-                "type": "tool_call",
-                "tool": "generate_search_variants",
-                "description": "Generiere Smart-Search-Varianten (Jobtitel-Fallbacks + Radius-Eskalation)",
+                {"type": "tool_call", "tool": "job_search", "parameters": {"what": "Entwickler", "where": "Hamburg", "size": 1}},
+                {"type": "analysis", "description": "Extrahiere Job-Details", 
+                "output_format": {"job_title": "string", "company_name": "string", "job_url": "string"}},
+                {"type": "tool_call", "tool": "company_career_contact_finder", 
+                "parameters": {"company_name": "{{step_2.result.company_name}}"}},
+                {"type": "tool_call", "tool": "user_document_search", 
+                "parameters": {"searchTerm": "Lebenslauf", "category": "resume"}},
+                {"type": "analysis", "description": "Extrahiere Lebenslauf-ID",
+                "output_format": {"resume_id": "string"}},
+                {"type": "analysis", "description": "Erstelle Bewerbungstext",
+                "output_format": {"cover_letter_text": "string"}},
+                {"type": "tool_call", "tool": "send_email", "requires_confirmation": true,
                 "parameters": {
-                    "base_title": "{{step_4.result.job_title}}",
-                    "base_location": "{{step_4.result.job_location}}",
-                    "skills": "{{step_4.result.skills}}"
-                }
-                },
-                {
-                "type": "tool_call",
-                "tool": "job_search",
-                "description": "Versuch 1: Suche mit erster Variante",
-                "parameters": {
-                    "what": "{{search_variants_list[0].what}}",
-                    "where": "{{search_variants_list[0].where}}",
-                    "radius": "{{search_variants_list[0].radius}}"
-                }
-                },
-                {
-                "type": "decision",
-                "description": "Prüfe Suchergebnis - ist Qualität gut genug oder retry?",
-                "output_format": {
-                    "type": "object",
-                    "fields": {
-                    "has_results": "boolean",
-                    "quality_score": "integer",
-                    "should_retry": "boolean",
-                    "next_variant_index": "integer"
-                    }
-                }
-                },
-                {
-                "type": "tool_call",
-                "tool": "job_search",
-                "description": "Versuch 2: Falls nötig mit nächster Variante",
-                "skip_if": "{{step_7.result.should_retry}} == false",
-                "parameters": {
-                    "what": "{{search_variants_list[{{step_7.result.next_variant_index}}].what}}",
-                    "where": "{{search_variants_list[{{step_7.result.next_variant_index}}].where}}",
-                    "radius": "{{search_variants_list[{{step_7.result.next_variant_index}}].radius}}"
-                }
-                }
+                "to": "{{step_3.result.application_email|step_3.result.general_email}}",
+                "subject": "Bewerbung als {{step_2.result.job_title}}",
+                "body": "{{step_6.result.cover_letter_text}}",
+                "attachments": ["{{step_5.result.resume_id}}"]
+                }}
             ]
             }
             ```
 
-            ### 2. Platzhalter-System
-
-            **Unterstützte Patterns:**
-
-            - **Nested Access:** `{{step_5.result.jobs[0].company}}`
-            - **Array-Index:** `{{search_variants_list[0].what}}`
-            - **Fallback-Chain:** `{{step_3.result.resume_id||step_2.result.doc_id||"default"}}`
-            - **Conditional Skip:** `skip_if: "{{step_X.result.has_results}} == true"`
-
-            ### 3. Context-Struktur
-
-            Executor baut folgenden Context auf:
-
-            ```json
-            {
-            "step_1": {
-                "result": { "documents": [...] }
-            },
-            "step_2": {
-                "result": { "resume_id": "3" }
-            },
-            "search_variants_list": [
-                {
-                "strategy": "title_location_radius",
-                "priority": 0,
-                "what": "Geschäftsführer",
-                "where": "Sereetz",
-                "radius": 0,
-                "description": "Geschäftsführer in Sereetz"
-                },
-                {
-                "strategy": "title_location_radius",
-                "priority": 1,
-                "what": "Geschäftsführer",
-                "where": "Sereetz",
-                "radius": 10,
-                "description": "Geschäftsführer in Sereetz (+10km)"
-                },
-                {
-                "strategy": "title_location_radius",
-                "priority": 10,
-                "what": "Niederlassungsleiter",
-                "where": "Sereetz",
-                "radius": 0,
-                "description": "Niederlassungsleiter in Sereetz"
-                }
-            ],
-            "search_variants_count": 15
-            }
-            ```
-
-            ## 📋 Workflow-Templates
-
-            ### Template A: Job-Suche mit Smart Retry
-
+            **Variante B: User sagt nur "bewerbe dich", "suche mir einen Job", "ich will mich beruflich verändern (ohne Job/Ort)**
             ```json
             {
             "steps": [
-                // 1. Dokumente listen
                 {
                 "type": "tool_call",
                 "tool": "user_document_list",
-                "description": "Liste ALLE Dokumente",
+                "description": "Liste Dokumente",
                 "parameters": {}
                 },
-                
-                // 2. Lebenslauf identifizieren
                 {
                 "type": "analysis",
-                "description": "Identifiziere Lebenslauf aus Liste",
+                "description": "Identifiziere Lebenslauf",
                 "output_format": {
-                    "type": "object",
-                    "fields": {
-                    "resume_id": "string",
-                    "confidence": "string"
-                    }
+                    "resume_id": "string"
                 }
                 },
-                
-                // 3. Lebenslauf lesen (mit Fallback)
                 {
                 "type": "tool_call",
                 "tool": "user_document_read",
@@ -441,175 +374,95 @@ final class DynamicWorkflowPlanner
                     "identifier": "{{step_2.result.resume_id}}"
                 }
                 },
-                
-                // 4. KRITISCH: Parameter extrahieren mit strengem Format
                 {
                 "type": "analysis",
-                "description": "Extrahiere Job-Parameter - GIB KONKRETE WERTE ZURÜCK",
+                "description": "Extrahiere Job-Parameter aus Lebenslauf",
                 "output_format": {
-                    "type": "object",
-                    "fields": {
                     "job_title": "string",
-                    "job_location": "string",
-                    "skills": "array",
-                    "experience_years": "string"
-                    }
-                },
-                "validation": {
-                    "required": ["job_title", "job_location"],
-                    "min_length": {
-                    "job_title": 3,
-                    "job_location": 3
-                    }
-                }
-                },
-                
-                // 5. Generiere Suchvarianten
-                {
-                "type": "tool_call",
-                "tool": "generate_search_variants",
-                "description": "Generiere intelligente Suchvarianten",
-                "parameters": {
-                    "base_title": "{{step_4.result.job_title}}",
-                    "base_location": "{{step_4.result.job_location}}",
-                    "skills": "{{step_4.result.skills}}"
-                }
-                },
-                
-                // 6-10: Iterative Job-Suche
-                {
-                "type": "tool_call",
-                "tool": "job_search",
-                "description": "Job-Suche Versuch 1",
-                "parameters": {
-                    "what": "{{search_variants_list[0].what}}",
-                    "where": "{{search_variants_list[0].where}}"
-                }
-                },
-                {
-                "type": "decision",
-                "description": "Evaluiere Ergebnis Versuch 1",
-                "output_format": {
-                    "type": "object",
-                    "fields": {
-                    "has_results": "boolean",
-                    "quality_score": "integer",
-                    "should_retry": "boolean"
-                    }
+                    "job_location": "string"
                 }
                 },
                 {
                 "type": "tool_call",
                 "tool": "job_search",
-                "description": "Job-Suche Versuch 2 (falls nötig)",
-                "skip_if": "{{step_7.result.should_retry}} == false",
+                "description": "Suche Jobs mit extrahierten Parametern",
                 "parameters": {
-                    "what": "{{search_variants_list[1].what}}",
-                    "where": "{{search_variants_list[1].where}}"
+                    "what": "{{step_4.result.job_title}}",
+                    "where": "{{step_4.result.job_location}}",
+                    "radius": 25
                 }
                 },
                 {
-                "type": "decision",
-                "description": "Wähle beste Ergebnisse aus allen Versuchen",
+                "type": "analysis",
+                "description": "Wähle besten Job",
                 "output_format": {
-                    "type": "object",
-                    "fields": {
-                    "final_job_title": "string",
-                    "final_company": "string",
-                    "final_job_url": "string"
-                    }
+                    "job_title": "string",
+                    "company_name": "string",
+                    "job_url": "string"
+                }
+                },
+                {
+                "type": "tool_call",
+                "tool": "company_career_contact_finder",
+                "parameters": {
+                    "company_name": "{{step_6.result.company_name}}"
+                }
+                },
+                {
+                "type": "analysis",
+                "description": "Erstelle Anschreiben",
+                "output_format": {
+                    "cover_letter_text": "string"
+                }
+                },
+                {
+                "type": "tool_call",
+                "tool": "send_email",
+                "requires_confirmation": true,
+                "parameters": {
+                    "to": "{{step_7.result.application_email}}",
+                    "subject": "Bewerbung als {{step_6.result.job_title}}",
+                    "body": "{{step_8.result.cover_letter_text}}",
+                    "attachments": ["{{step_2.result.resume_id}}"]
                 }
                 }
             ]
             }
             ```
 
-            ## 🔧 Tool: generate_search_variants
+            ⚡ OPTIMIERUNGSREGELN:
 
-            Wird vom Executor erkannt und ruft `SmartJobSearchStrategy` auf:
+            1. **Erkenne explizite Parameter**:
+            - "als Entwickler in Lübeck" → what="Entwickler", where="Lübeck"
+            - nutze Variante A immer wenn möglich, nur wenn keine Parameter → Variante B
 
-            **Input:**
-            ```json
-            {
-            "base_title": "Geschäftsführer",
-            "base_location": "Sereetz",
-            "skills": ["Personalführung", "PHP", "Marketing"]
-            }
-            ```
+            2. **Minimale Steps**:
+            - Mit Job+Ort: 8 Steps (Suche → Auswahl → Kontakte → Lebenslauf → Anschreiben → E-Mail)
+            - Ohne Parameter: +2-3 Steps für Extraktion
 
-            **Output in Context:**
-            ```json
-            {
-            "search_variants_list": [
-                {"what": "Geschäftsführer", "where": "Sereetz", "radius": 0, "priority": 0},
-                {"what": "Geschäftsführer", "where": "Sereetz", "radius": 10, "priority": 1},
-                {"what": "Geschäftsführer", "where": "Sereetz", "radius": 20, "priority": 2},
-                {"what": "Niederlassungsleiter", "where": "Sereetz", "radius": 0, "priority": 10},
-                {"what": "Betriebsleiter", "where": "Sereetz", "radius": 0, "priority": 20},
-                {"what": "Personalführung", "where": "Sereetz", "radius": 0, "priority": 100}
-            ]
-            }
-            ```
+            3. **KEINE Search-Varianten-Generation**:
+            - Wenn User konkrete Eingaben macht, nutze diese DIREKT
+            - Keine generate_search_variants, keine Retry-Loops
 
-            ## ✅ Validation Rules
+            4. **Text direkt in E-Mail**:
+            - Anschreiben im body, KEIN PDF
+            - Nur Lebenslauf als Anhang
 
-            Agent MUSS diese Rules prüfen:
+            5. **Ein Job = Ein Anschreiben**:
+            - Wähle EINEN besten Job aus
+            - KEINE Iterationen über multiple Jobs
 
-            1. **Keine leeren Parameter-Extraktion**
-            - Wenn analysis `job_title: ""` liefert → FEHLER
-            - Agent muss aus Dokumenten konkrete Werte extrahieren
+            5. **das request_tool_development Tool wird nur dann verwendet, wenn es keine andere Möglichkeit gibt das anliegen zu bearbeiten**
 
-            2. **Platzhalter müssen auflösbar sein**
-            - Vor Tool-Call: Prüfe ob alle `{{...}}` auflösbar
-            - Falls nicht: Füge Fallback-Step ein
-
-            3. **Decision-Steps müssen boolean flags liefern**
-            - `has_results`, `should_retry` PFLICHT
-            - Keine Text-Antworten ohne Struktur
-
-            ## 🚨 Error Recovery
-
-            Bei leeren Extraktionen:
-
-            ```json
-            {
-            "type": "analysis",
-            "description": "FALLBACK: Extrahiere aus GESAMTEM Lebenslauf-Text konkrete Jobtitel",
-            "force_concrete_extraction": true,
-            "output_format": {
-                "type": "object",
-                "fields": {
-                "most_recent_job_title": "string",
-                "most_recent_employer": "string",
-                "work_location": "string"
-                }
-            }
-            }
-            ```
-
-            ## 💡 Best Practices
-
-            1. **Varianten VOR Loop generieren** - Nicht in jedem Retry neu berechnen
-            2. **Quality-Score nutzen** - Nicht nur `job_count > 0`
-            3. **Max 5 Retry-Versuche** - Dann beste auswählen
-            4. **Skip-Logic verwenden** - Spart unnötige Tool-Calls
-            5. **Fallback-Chains** - `{{step_3.result||step_2.result||"fallback"}}`
-
-
-            📋 VERFÜGBARER CONTEXT (VERIFIZIERT):
-            ```json
-            {$contextInfo}
-            ```
-
-            USER INTENT:
-            {$intent}
-
-            OUTPUT (NUR JSON):
+            OUTPUT-FORMAT (NUR JSON):
             ```json
             {
             "steps": [...]
             }
             ```
+
+            WICHTIG: Analysiere die User-Anfrage und erkenne vorhandene Parameter!
+            
             PROMPT;
     }
 

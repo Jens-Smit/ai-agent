@@ -80,9 +80,8 @@ trait SmartDecisionTrait
             $this->statusService->addStatus(
                 $sessionId,
                 sprintf(
-                    '✅ Jobs gefunden: %d Ergebnisse (%s)',
-                    $evaluation['job_count'],
-                    $evaluation['search_description']
+                    '✅ Jobs gefunden: %d Ergebnisse',
+                    $evaluation['job_count']
                 )
             );
 
@@ -142,7 +141,7 @@ trait SmartDecisionTrait
     }
 
     /**
-     * Findet letztes Job-Search-Result im Context
+     * 🔧 FIX: Findet letztes Job-Search-Result mit robustem Parsing
      */
     private function findLastJobSearchResult(array $context, int $currentStep): ?array
     {
@@ -156,26 +155,54 @@ trait SmartDecisionTrait
 
             $result = $context[$stepKey]['result'];
 
-            // Prüfe ob es ein job_search Result ist
+            // 🔧 FIX: Prüfe ob es ein job_search Result ist (verschiedene Formate)
+            $isJobSearch = false;
+            $jobData = [];
+
+            // Format 1: {"tool": "job_search", "result": {...}}
             if (isset($result['tool']) && $result['tool'] === 'job_search') {
-                return [
-                    'step' => $i,
-                    'result' => $result,
-                    'search_params' => $context['search_variants'][$i] ?? []
-                ];
+                $isJobSearch = true;
+                $jobData = $result['result'] ?? $result;
+            }
+            // Format 2: Direktes Result mit job_count oder jobs
+            elseif (isset($result['job_count']) || isset($result['jobs'])) {
+                $isJobSearch = true;
+                $jobData = $result;
             }
 
-            // Oder direktes job_search Result
-            if (isset($result['jobs']) || isset($result['job_count'])) {
+            if ($isJobSearch) {
                 return [
                     'step' => $i,
-                    'result' => $result,
-                    'search_params' => $context['search_variants'][$i] ?? []
+                    'result' => $jobData,
+                    'search_params' => $this->extractSearchParamsFromContext($context, $i)
                 ];
             }
         }
 
         return null;
+    }
+
+    /**
+     * 🔧 NEU: Extrahiert Search-Parameter aus Context für einen bestimmten Step
+     */
+    private function extractSearchParamsFromContext(array $context, int $stepNumber): array
+    {
+        $stepKey = 'step_' . $stepNumber;
+        
+        // Versuche search_params aus Step-Result zu holen
+        if (isset($context[$stepKey]['search_params'])) {
+            return $context[$stepKey]['search_params'];
+        }
+
+        // Fallback: Baue Default-Params
+        return [
+            'strategy' => 'unknown',
+            'priority' => 999,
+            'what' => 'unknown',
+            'where' => 'unknown',
+            'radius' => 0,
+            'description' => 'Job Search Result'
+        ];
     }
 
     /**
@@ -225,7 +252,7 @@ trait SmartDecisionTrait
     }
 
     /**
-     * Findet besten Job-Search-Versuch aus allen Versuchen
+     * 🔧 FIX: Findet besten Job-Search-Versuch mit robustem Parsing
      */
     private function findBestJobSearchAttempt(array $context, int $currentStep): array
     {
@@ -243,27 +270,80 @@ trait SmartDecisionTrait
 
             $result = $context[$stepKey]['result'];
 
-            // Extrahiere Job-Count
-            $jobCount = 0;
-            if (isset($result['job_count'])) {
-                $jobCount = $result['job_count'];
-            } elseif (isset($result['jobs']) && is_array($result['jobs'])) {
-                $jobCount = count($result['jobs']);
-            }
+            // 🔧 FIX: Extrahiere Job-Count aus verschiedenen Formaten
+            $jobCount = $this->extractJobCountFromResult($result);
+            $jobs = $this->extractJobsFromResult($result);
 
             if ($jobCount > $bestAttempt['job_count']) {
                 $bestAttempt = [
                     'step' => $i,
                     'job_count' => $jobCount,
-                    'best_job_title' => $result['jobs'][0]['title'] ?? '',
-                    'best_job_company' => $result['jobs'][0]['company'] ?? '',
-                    'best_job_url' => $result['jobs'][0]['url'] ?? '',
+                    'best_job_title' => $jobs[0]['title'] ?? '',
+                    'best_job_company' => $jobs[0]['company'] ?? $jobs[0]['arbeitgeber'] ?? '',
+                    'best_job_url' => $jobs[0]['url'] ?? '',
                     'quality_score' => $jobCount * 10
                 ];
             }
         }
 
         return $bestAttempt;
+    }
+
+    /**
+     * 🔧 NEU: Extrahiert Job-Count aus verschiedenen Result-Formaten
+     */
+    private function extractJobCountFromResult(array $result): int
+    {
+        // Format 1: Direktes job_count
+        if (isset($result['job_count'])) {
+            return (int)$result['job_count'];
+        }
+
+        // Format 2: Count von jobs Array
+        if (isset($result['jobs']) && is_array($result['jobs'])) {
+            return count($result['jobs']);
+        }
+
+        // Format 3: Nested in result.result
+        if (isset($result['result'])) {
+            if (is_array($result['result'])) {
+                if (isset($result['result']['job_count'])) {
+                    return (int)$result['result']['job_count'];
+                }
+                if (isset($result['result']['jobs']) && is_array($result['result']['jobs'])) {
+                    return count($result['result']['jobs']);
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * 🔧 NEU: Extrahiert Jobs-Array aus verschiedenen Result-Formaten
+     */
+    private function extractJobsFromResult(array $result): array
+    {
+        // Format 1: Direkt jobs
+        if (isset($result['jobs']) && is_array($result['jobs'])) {
+            return $result['jobs'];
+        }
+
+        // Format 2: Nested in result.result
+        if (isset($result['result'])) {
+            if (is_array($result['result'])) {
+                if (isset($result['result']['jobs']) && is_array($result['result']['jobs'])) {
+                    return $result['result']['jobs'];
+                }
+            }
+        }
+
+        // Format 3: In tool_result (für wrapped results)
+        if (isset($result['tool_result']['jobs']) && is_array($result['tool_result']['jobs'])) {
+            return $result['tool_result']['jobs'];
+        }
+
+        return [];
     }
 
     /**

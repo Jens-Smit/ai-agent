@@ -30,6 +30,7 @@ final class WorkflowPlanner
     {
         /** @var User $user */
         $user = $this->security->getUser();
+        
         $messages = new MessageBag(
             Message::forSystem($this->getWorkflowPlanningPrompt()),
             Message::ofUser($userIntent)
@@ -38,7 +39,6 @@ final class WorkflowPlanner
         $result = $this->agent->call($messages);
         $plan = $this->parseWorkflowPlan($result->getContent());
 
-        // 🔧 FIX: Validiere und optimiere Plan
         $plan = $this->validateAndOptimizePlan($plan);
 
         $workflow = new Workflow();
@@ -98,7 +98,6 @@ final class WorkflowPlanner
             $step['parameters'] = $step['parameters'] ?? [];
             $step['requires_confirmation'] = $step['requires_confirmation'] ?? false;
 
-            // 🔧 FIX: Für Analysis/Decision Steps output_format erzwingen
             if (in_array($step['type'], ['analysis', 'decision'])) {
                 if (!isset($step['output_format'])) {
                     $step['output_format'] = $this->inferOutputFormat($step, $plan['steps'], $index);
@@ -116,7 +115,6 @@ final class WorkflowPlanner
                 throw new \RuntimeException("Missing tool name for tool_call at step {$index}");
             }
 
-            // ✅ NEU: Automatische Validierung und Korrektur von send_email attachments
             if ($step['type'] === 'tool_call' && $step['tool'] === 'send_email') {
                 $step['parameters'] = $this->normalizeEmailAttachments($step['parameters']);
             }
@@ -125,9 +123,6 @@ final class WorkflowPlanner
         return $plan;
     }
 
-    /**
-     * ✅ NEU: Normalisiert Attachments in send_email Parameters
-     */
     private function normalizeEmailAttachments(array $params): array
     {
         if (!isset($params['attachments'])) {
@@ -136,30 +131,24 @@ final class WorkflowPlanner
 
         $attachments = $params['attachments'];
 
-        // Falls attachments ein String ist (JSON oder einzelner Wert)
         if (is_string($attachments)) {
-            // Versuche JSON zu parsen
             $decoded = json_decode($attachments, true);
             if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
                 $attachments = $decoded;
             } else {
-                // Einzelner Wert - behandle als document_id Platzhalter
                 $attachments = [$attachments];
             }
         }
 
-        // Normalisiere Array-Elemente
         if (is_array($attachments)) {
             $normalized = [];
             foreach ($attachments as $attachment) {
                 if (is_string($attachment)) {
-                    // String-Platzhalter → behandle als document_id
                     $normalized[] = [
                         'type' => 'document_id',
                         'value' => $attachment
                     ];
                 } elseif (is_array($attachment)) {
-                    // Bereits strukturiert - prüfe ob type gesetzt ist
                     if (!isset($attachment['type'])) {
                         $attachment['type'] = 'document_id';
                     }
@@ -169,7 +158,6 @@ final class WorkflowPlanner
             $attachments = $normalized;
         }
 
-        // Konvertiere zurück zu JSON für Tool-Parameter
         $params['attachments'] = json_encode($attachments, JSON_UNESCAPED_UNICODE);
 
         return $params;
@@ -179,7 +167,6 @@ final class WorkflowPlanner
     {
         $requiredFields = [];
 
-        // Suche in nachfolgenden Steps nach Referenzen
         for ($i = $currentIndex + 1; $i < count($allSteps); $i++) {
             $nextStep = $allSteps[$i];
             $params = json_encode($nextStep['parameters'] ?? []);
@@ -192,7 +179,6 @@ final class WorkflowPlanner
             }
         }
 
-        // Extrahiere auch aus description
         $description = $currentStep['description'] ?? '';
         if (preg_match_all('/(\w+):\s*"([^"]+)"/', $description, $matches)) {
             foreach ($matches[1] as $field) {
@@ -216,16 +202,11 @@ final class WorkflowPlanner
     {
         $json = null;
 
-        // Strategie 1: JSON in Code-Blöcken
         if (preg_match('/```(?:json)?\s*(\{.*?\})\s*```/s', $content, $matches)) {
             $json = $matches[1];
-        }
-        // Strategie 2: JSON-Objekt mit "steps"
-        elseif (preg_match('/\{.*?\"steps\"\s*:\s*\[.*?\]\s*\}/s', $content, $matches)) {
+        } elseif (preg_match('/\{.*?\"steps\"\s*:\s*\[.*?\]\s*\}/s', $content, $matches)) {
             $json = $matches[0];
-        }
-        // Strategie 3: Erstes JSON-Objekt
-        else {
+        } else {
             if (preg_match('/^.*?(\{.*\}).*?$/s', $content, $matches)) {
                 $json = $matches[1];
             }
@@ -238,10 +219,9 @@ final class WorkflowPlanner
             throw new \RuntimeException('Could not parse workflow plan from agent response: No JSON found.');
         }
 
-        // JSON-Bereinigung
-        $json = preg_replace('/\/\*(.*?)\*\//s', '', $json); // Block-Kommentare
-        $json = preg_replace('/\/\/.*$/m', '', $json);      // Zeilen-Kommentare
-        $json = preg_replace('/,\s*([\]\}])/', '$1', $json); // Trailing commas
+        $json = preg_replace('/\/\*(.*?)\*\//s', '', $json);
+        $json = preg_replace('/\/\/.*$/m', '', $json);
+        $json = preg_replace('/,\s*([\]\}])/', '$1', $json);
         
         $json = trim($json);
         if (!str_starts_with($json, '{') && !str_starts_with($json, '[')) {
@@ -271,186 +251,187 @@ final class WorkflowPlanner
     private function getWorkflowPlanningPrompt(): string
     {
         return <<<PROMPT
-    Du bist ein intelligenter Workflow-Planer. Erstelle effiziente, ausführbare Workflows basierend auf der User-Anfrage.
-    Dabei überlegst du was das Ziel des Users ist und denkst weiter. ,z.B. wenn der user einen Job sucht, dann plan den workflow selbständig bis zum versenden der Bewerbung per Email.
+Du bist ein intelligenter Workflow-Planer. Erstelle IMMER EFFIZIENTE, OPTIMIERTE, strukturierte, ausführbare Workflows basierend auf der User-Anfrage.
 
-    🎯 KRITISCHE REGELN:
+🎯 KRITISCHE REGELN:
 
-    1. **Output-Format**: JEDER analysis/decision Step MUSS "output_format" definieren
-    2. **Platzhalter**: Verwende {{step_N.result.FELDNAME}} für Referenzen
-    3. **Flexibilität**: Wähle die EINFACHSTE Lösung - nicht immer PDFs nötig!
-    4. **Bestätigung**: requires_confirmation: true für E-Mails, Termine, Zahlungen
+1. **NUTZE USER-EINGABEN**: Wenn der User "Job als Entwickler in Lübeck" sagt, dann SPRINGE DIREKT zur Jobsuche mit diesen Werten!
+2. **KEINE UNNÖTIGEN STEPS**: Überspringe Dokument-Analyse wenn 'was' und 'wo' bereits bekannt sind
+3. **INTELLIGENTE REIHENFOLGE**: 
+   - User gibt Job+Ort an → Jobsuche → Firmenkontakte → Lebenslauf laden → Anschreiben → E-Mail
+   - User gibt NUR "bewerbe dich" → Lebenslauf laden → Job-Parameter extrahieren → Jobsuche → Rest
+4. **Output-Format**:  enthält die EXAKTEN Feldnamen, die nachfolgende Steps benötigen
+5. **Bestätigung**: requires_confirmation: true NUR für E-Mails
+6. Verwende {{step_N.result.FELDNAME}} um auf Felder zuzugreifen
 
-    📋 VERFÜGBARE TOOLS:
+STEP-TYPES:
+- tool_call: Ruft ein Tool auf
+- analysis: Analysiert Daten → MUSS output_format haben
+- decision: Trifft Entscheidung → MUSS output_format haben
+- notification: Sendet Nachricht
 
-    **Job-Suche:**
-    - job_search: Sucht Stellenangebote (Parameter: what, where, size)
-    - company_career_contact_finder: Findet Karriere-Kontakte (Parameter: company_name)
+📋 VERFÜGBARE TOOLS:
 
-    **Dokumente:**
-    - user_document_search: Sucht Dokumente (Parameter: searchTerm, category)
-    - user_document_read: Liest Dokument (Parameter: identifier)
-    - user_document_list: Listet Dokumente (Parameter: category)
+**Job-Suche:**
+-  job_search: Sucht Stellenangebote (Parameter: what, where, radius)
+  - Beispiel: {"what": "Entwickler", "where": "Lübeck", "radius": 25}
+- company_career_contact_finder: Findet Karriere-Kontakte (Parameter: company_name)
 
-    **Generierung:**
-    - PdfGenerator: Erstellt PDFs (Parameter: text, filename) → Gibt zurück: {document_id, filepath, filename}
+**Dokumente:**
+- user_document_search: Sucht Dokumente (Parameter: searchTerm, category)
+- user_document_read: Liest Dokument (Parameter: identifier)
+- user_document_list: Listet Dokumente (Parameter: category)
 
-    **Kommunikation:**
-    - send_email: Versendet E-Mail (Parameter: to, subject, body, attachments?)
-    - body: Kann langen Text enthalten - KEIN PDF nötig wenn Text direkt im Body steht!
-    - attachments: Optional! Format: [{"type":"document_id","value":"123"}] oder ["{{step_N.result.document_id}}"]
+**Kommunikation:**
+- send_email: Versendet E-Mail (Parameter: to, subject, body, attachments)
+  - body: Kann langen Text enthalten - KEIN PDF nötig!
+  - attachments: Format: ["{{step_N.result.resume_id}}"] oder ["3"]
 
-    **Web:**
-    - google_search: Google-Suche (Parameter: query)
-    - web_scraper: Scraped Webseite (Parameter: url)
+**Web:**
+- google_search: Google-Suche (Parameter: query)
+- web_scraper: Scraped Webseite (Parameter: url)
 
-    🎨 BEWERBUNGS-WORKFLOWS - drei VARIANTEN:
+🎨 OPTIMIERTE BEWERBUNGS-WORKFLOWS:
 
-        **Variante A: Text direkt in E-Mail (EINFACHER, BEVORZUGT)**
-        ```json
-        {
-        "steps": [
-            {"type": "tool_call", "tool": "job_search", "parameters": {"what": "Entwickler", "where": "Hamburg", "size": 1}},
-            {"type": "analysis", "description": "Extrahiere Job-Details", 
-            "output_format": {"job_title": "string", "company_name": "string", "job_url": "string"}},
-            {"type": "tool_call", "tool": "company_career_contact_finder", 
-            "parameters": {"company_name": "{{step_2.result.company_name}}"}},
-            {"type": "tool_call", "tool": "user_document_search", 
-            "parameters": {"searchTerm": "Lebenslauf", "category": "resume"}},
-            {"type": "analysis", "description": "Extrahiere Lebenslauf-ID",
-            "output_format": {"resume_id": "string"}},
-            {"type": "analysis", "description": "Erstelle Bewerbungstext",
-            "output_format": {"cover_letter_text": "string"}},
-            {"type": "tool_call", "tool": "send_email", "requires_confirmation": true,
-            "parameters": {
-            "to": "{{step_3.result.application_email|step_3.result.general_email}}",
-            "subject": "Bewerbung als {{step_2.result.job_title}}",
-            "body": "{{step_6.result.cover_letter_text}}",
-            "attachments": ["{{step_5.result.resume_id}}"]
-            }}
-        ]
-        }
-        ```
-    
-        **Variante B: Mit PDF-Anschreiben (NUR wenn explizit gewünscht)**
-        ```json
-        {
-        "steps": [
-            // ... Steps 1-6 wie oben ...
-            {"type": "tool_call", "tool": "PdfGenerator",
-            "parameters": {
-            "text": "{{step_6.result.cover_letter_text}}",
-            "filename": "Bewerbung_{{step_2.result.company_name}}.pdf"
-            }},
-            {"type": "tool_call", "tool": "send_email", "requires_confirmation": true,
-            "parameters": {
-            "to": "{{step_3.result.application_email|step_3.result.general_email}}",
-            "subject": "Bewerbung als {{step_2.result.job_title}}",
-            "body": "Sehr geehrte Damen und Herren,anbei sende ich Ihnen meine Bewerbungsunterlagen.
-            Mit freundlichen Grüßen",
-            "attachments": ["{{step_7.result.document_id}}", "{{step_5.result.resume_id}}"]
-            }}
-        ]
-        }
-        ```
-        **Variante C: Mit Dokumenten-Extraktion für fehlende Suchparameter (Wenn 'was'/'wo' im Request fehlen)**
-        ```json
-        {
-        "steps": [
-            {"type": "tool_call", "tool": "user_document_list", "parameters": {"category": "attachment"}},
-            {"type": "analysis", "description": "Wähle den besten Lebenslauf ('identifier') aus der Liste aus.",
-            "output_format": {"resume_identifier": "string"}},
-            {"type": "tool_call", "tool": "user_document_read", 
-            "parameters": {"identifier": "{{step_2.result.resume_identifier}}"}},
-            {"type": "analysis", "description": "Analysiere den Lebenslauf-Inhalt (step_3) und extrahiere die Berufsbezeichnung der letzten Position ('was') und der angegebenen adresse +30km ('wo') für die Jobsuche. Dies ersetzt fehlende User-Eingaben. Die resultierenden Parameter müssen für eine mögliche Schleife (4-5 Versuche) verwendet werden.",
-            "output_format": {"job_search_what": "string", "job_search_where": "string", "resume_id": "string"}
-            },
-            {"type": "tool_call", "tool": "job_search",
-            "parameters": {"what": "{{step_4.result.job_search_what}}", "where": "{{step_4.result.job_search_where}}", "size": 1}},
-            {"type": "analysis", "description": "Extrahiere Job-Details. Wenn kein Ergebnis gefunden wurde, signalisiert dies dem übergeordneten System, die Suche mit angepassten Parametern zu wiederholen.", 
-            "output_format": {"job_title": "string", "company_name": "string", "job_url": "string"}},
-            {"type": "tool_call", "tool": "company_career_contact_finder", 
-            "parameters": {"company_name": "{{step_6.result.company_name}}"}},
-            {"type": "analysis", "description": "Erstelle Bewerbungstext",
-            "output_format": {"cover_letter_text": "string"}},
-            {"type": "tool_call", "tool": "send_email", "requires_confirmation": true,
-            "parameters": {
-            "to": "{{step_7.result.application_email|step_7.result.general_email}}",
-            "subject": "Bewerbung als {{step_6.result.job_title}}",
-            "body": "{{step_8.result.cover_letter_text}}",
-            "attachments": ["{{step_2.result.resume_identifier}}"]
-            }}
-        ]
-        }
-        ```
-    🎨 TERMINVERWALTUNGS -WORKFLOWS:
-    🎨 Immobilien -WORKFLOWS:
-    🎨 Angebotseinholungs -WORKFLOWS
-    🎨 Eventplanungs -WORKFLOWS
-    
-    ⚡ OPTIMIERUNGSREGELN:
+**Variante A: User gibt Job-> what und Ort-> where an (BEVORZUGT)**
+```json
+{
+  "steps": [
+    {"type": "tool_call", "tool": "job_search", "parameters": {"what": "Entwickler", "where": "Hamburg", "size": 1}},
+    {"type": "analysis", "description": "Extrahiere Job-Details", 
+     "output_format": {"job_title": "string", "company_name": "string", "job_url": "string"}},
+    {"type": "tool_call", "tool": "company_career_contact_finder", 
+     "parameters": {"company_name": "{{step_2.result.company_name}}"}},
+    {"type": "tool_call", "tool": "user_document_search", 
+     "parameters": {"searchTerm": "Lebenslauf", "category": "resume"}},
+    {"type": "analysis", "description": "Extrahiere Lebenslauf-ID",
+     "output_format": {"resume_id": "string"}},
+    {"type": "analysis", "description": "Erstelle Bewerbungstext",
+     "output_format": {"cover_letter_text": "string"}},
+    {"type": "tool_call", "tool": "send_email", "requires_confirmation": true,
+     "parameters": {
+       "to": "{{step_3.result.application_email|step_3.result.general_email}}",
+       "subject": "Bewerbung als {{step_2.result.job_title}}",
+       "body": "{{step_6.result.cover_letter_text}}",
+       "attachments": ["{{step_5.result.resume_id}}"]
+     }}
+  ]
+}
+```
 
-    1. **Bevorzuge Variante A** (Text direkt im Body) - einfacher und schneller
-    2. **Verwende Variante B** nur wenn User explizit "PDF" oder "Anschreiben als Anhang" sagt
-    3. Verwende Variante C wenn der User eine Bewerbung starten will, aber die Suchparameter ('was'/'wo') im Request fehlen.
-    4. **Attachments sind OPTIONAL** - weglassen wenn nicht nötig
-    5. **Kleine Steps** - besser 7 kleine als 3 große Steps
-    6. **Pipe-Fallbacks** für E-Mails: {{email1|email2|default@example.com}}
-
-    OUTPUT-FORMAT (NUR JSON):
-    ```json
+**Variante B: User sagt nur "bewerbe dich", "suche mir einen Job", "ich will mich beruflich verändern (ohne Job/Ort)**
+```json
+{
+  "steps": [
     {
-    "steps": [
-        {
-        "type": "tool_call",
-        "description": "Suche Jobs in Hamburg",
-        "tool": "job_search",
-        "parameters": {
-            "what": "Entwickler",
-            "where": "Hamburg",
-            "size": 1
-        }
-        },
-        {
-        "type": "analysis",
-        "description": "Extrahiere Jobdetails",
-        "output_format": {
-            "job_title": "string",
-            "company_name": "string",
-            "job_description": "string",
-            "job_location": "string"
-        }
-        },
-        {
-        "type": "tool_call",
-        "description": "Finde Firmenkontakte",
-        "tool": "company_career_contact_finder",
-        "parameters": {
-            "company_name": "{{step_2.result.company_name}}"
-        }
-        },
-        {
-            "type": "tool_call",
-            "tool": "send_email",
-            "parameters": {
-                "to": "{{step_3.result.application_email|step_3.result.general_email}}",
-                "subject": "Bewerbung - {{step_2.result.company_name}}",
-                "body": "Sehr geehrte Damen und Herren...",
-                "attachments": [
-                    "{{step_6.result.resume_id}}",
-                    "{{step_9.result.filepath}}"
-                ]
-            }
-        }
-    ]
+      "type": "tool_call",
+      "tool": "user_document_list",
+      "description": "Liste Dokumente",
+      "parameters": {}
+    },
+    {
+      "type": "analysis",
+      "description": "Identifiziere Lebenslauf",
+      "output_format": {
+        "resume_id": "string"
+      }
+    },
+    {
+      "type": "tool_call",
+      "tool": "user_document_read",
+      "description": "Lese Lebenslauf",
+      "parameters": {
+        "identifier": "{{step_2.result.resume_id}}"
+      }
+    },
+    {
+      "type": "analysis",
+      "description": "Extrahiere Job-Parameter aus Lebenslauf",
+      "output_format": {
+        "job_title": "string",
+        "job_location": "string"
+      }
+    },
+    {
+      "type": "tool_call",
+      "tool": "job_search",
+      "description": "Suche Jobs mit extrahierten Parametern",
+      "parameters": {
+        "what": "{{step_4.result.job_title}}",
+        "where": "{{step_4.result.job_location}}",
+        "radius": 25
+      }
+    },
+    {
+      "type": "analysis",
+      "description": "Wähle besten Job",
+      "output_format": {
+        "job_title": "string",
+        "company_name": "string",
+        "job_url": "string"
+      }
+    },
+    {
+      "type": "tool_call",
+      "tool": "company_career_contact_finder",
+      "parameters": {
+        "company_name": "{{step_6.result.company_name}}"
+      }
+    },
+    {
+      "type": "analysis",
+      "description": "Erstelle Anschreiben",
+      "output_format": {
+        "cover_letter_text": "string"
+      }
+    },
+    {
+      "type": "tool_call",
+      "tool": "send_email",
+      "requires_confirmation": true,
+      "parameters": {
+        "to": "{{step_7.result.application_email}}",
+        "subject": "Bewerbung als {{step_6.result.job_title}}",
+        "body": "{{step_8.result.cover_letter_text}}",
+        "attachments": ["{{step_2.result.resume_id}}"]
+      }
     }
-    ```
+  ]
+}
+```
 
-    REGELN:
-    1. Output-Format IMMER definieren bei analysis/decision
-    2. Feldnamen müssen EXAKT in Platzhaltern verwendet werden
-    3. requires_confirmation: true für E-Mails, Termine, Zahlungen
-    4. Kleine, atomare Steps bevorzugen
-    PROMPT;
+⚡ OPTIMIERUNGSREGELN:
+
+1. **Erkenne explizite Parameter**:
+   - "als Entwickler in Lübeck" → what="Entwickler", where="Lübeck"
+   - nutze Variante A immer wenn möglich, nur wenn keine Parameter → Variante B
+
+2. **Minimale Steps**:
+   - Mit Job+Ort: 8 Steps (Suche → Auswahl → Kontakte → Lebenslauf → Anschreiben → E-Mail)
+   - Ohne Parameter: +2-3 Steps für Extraktion
+
+3. **KEINE Search-Varianten-Generation**:
+   - Wenn User konkrete Eingaben macht, nutze diese DIREKT
+   - Keine generate_search_variants, keine Retry-Loops
+
+4. **Text direkt in E-Mail**:
+   - Anschreiben im body, KEIN PDF
+   - Nur Lebenslauf als Anhang
+
+5. **Ein Job = Ein Anschreiben**:
+   - Wähle EINEN besten Job aus
+   - KEINE Iterationen über multiple Jobs
+
+5. **das request_tool_development Tool wird nur dann verwendet, wenn es keine andere Möglichkeit gibt das anliegen zu bearbeiten**
+
+OUTPUT-FORMAT (NUR JSON):
+```json
+{
+  "steps": [...]
+}
+```
+
+WICHTIG: Analysiere die User-Anfrage und erkenne vorhandene Parameter!
+PROMPT;
     }
 }

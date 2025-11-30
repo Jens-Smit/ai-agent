@@ -21,9 +21,6 @@ use Symfony\AI\Agent\AgentInterface;
 use Symfony\AI\Platform\PlatformInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
-/**
- * Enhanced Executor mit automatischer Fehlerkorrektur + Smart Retry Logic
- */
 final class EnhancedWorkflowExecutor
 {
     use ToolExecutionTrait;
@@ -31,7 +28,6 @@ final class EnhancedWorkflowExecutor
     use SmartRetryTrait;
     use SmartDecisionTrait;
 
-    // ✅ Property nur HIER definieren (nicht in Traits)
     private ContextResolver $contextResolver;
     private int $agentFailureCount = 0;
     private bool $useFlashLite = false;
@@ -51,9 +47,6 @@ final class EnhancedWorkflowExecutor
         $this->contextResolver = new ContextResolver($this->logger);
     }
 
-    /**
-     * Führt Workflow mit Self-Healing + Smart Retry Logic aus
-     */
     public function executeWorkflow(Workflow $workflow, ?User $user = null): void
     {
         $workflow->setStatus('running');
@@ -65,17 +58,14 @@ final class EnhancedWorkflowExecutor
         foreach ($workflow->getSteps() as $step) {
             $stepKey = 'step_' . $step->getStepNumber();
 
-            // Skip completed steps
             if ($step->getStatus() === 'completed') {
                 $context[$stepKey] = ['result' => $step->getResult()];
                 continue;
             }
 
-            // ✅ Prüfe ob Step Teil einer Retry-Logik ist und übersprungen werden soll
             if ($this->isRetryStep($step) && $this->shouldSkipStep($step, $context)) {
                 $this->logger->info('Skipping retry step - previous attempt successful', [
-                    'step' => $step->getStepNumber(),
-                    'description' => $step->getDescription()
+                    'step' => $step->getStepNumber()
                 ]);
                 
                 $result = $this->copyLastSuccessfulJobResult($step, $context);
@@ -87,23 +77,18 @@ final class EnhancedWorkflowExecutor
                 
                 $this->statusService->addStatus(
                     $workflow->getSessionId(),
-                    sprintf('⏭️ Step %d übersprungen (vorheriger Versuch erfolgreich)', $step->getStepNumber())
+                    sprintf('⏭️ Step %d übersprungen', $step->getStepNumber())
                 );
                 
                 $this->em->flush();
                 continue;
             }
 
-            // ✅ Spezialbehandlung für "finale Auswahl" Decision-Steps
             if ($step->getStepType() === 'decision') {
                 $description = strtolower($step->getDescription());
                 if (str_contains($description, 'finale') || 
                     str_contains($description, 'wähle besten') ||
                     str_contains($description, 'aus allen versuchen')) {
-                    
-                    $this->logger->info('Executing final decision step - selecting best result', [
-                        'step' => $step->getStepNumber()
-                    ]);
                     
                     $result = $this->findBestJobFromRetries($context, $step->getStepNumber());
                     
@@ -128,13 +113,12 @@ final class EnhancedWorkflowExecutor
             );
 
             try {
-                // 🔧 ADAPTIVE EXECUTION mit verbessertem Resolver
+                // 🔧 FIX: executeStepWithRecovery aktualisiert jetzt den Context direkt
                 $result = $this->executeStepWithRecovery($step, $context, $workflow->getSessionId(), $user);
                 
                 if ($this->isEmptyResult($result)) {
                     $this->logger->warning('Step returned empty result, attempting recovery', [
-                        'step' => $step->getStepNumber(),
-                        'result' => $result
+                        'step' => $step->getStepNumber()
                     ]);
 
                     $result = $this->retryStepWithEnhancedContext($step, $context, $workflow->getSessionId(), $user);
@@ -160,10 +144,6 @@ final class EnhancedWorkflowExecutor
                 ]);
 
                 if ($failedSteps < 3 && $this->canContinueWithoutStep($step)) {
-                    $this->logger->info('Continuing workflow despite failed step', [
-                        'step' => $step->getStepNumber()
-                    ]);
-
                     $step->setStatus('skipped');
                     $step->setErrorMessage('Skipped due to error: ' . $e->getMessage());
                     
@@ -186,11 +166,11 @@ final class EnhancedWorkflowExecutor
     }
 
     /**
-     * ✅ NEU: Step-Execution mit ContextResolver und Tool-Variant-Generation
+     * 🔧 FIX: executeStepWithRecovery aktualisiert jetzt Context für generate_search_variants
      */
     private function executeStepWithRecovery(
         WorkflowStep $step,
-        array $context,
+        array &$context, // 🔧 FIX: Übergabe als Referenz!
         string $sessionId,
         ?User $user
     ): array {
@@ -199,7 +179,7 @@ final class EnhancedWorkflowExecutor
 
         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
             try {
-                // ✅ Spezial-Handling für generate_search_variants
+                // 🔧 FIX: Spezial-Handling für generate_search_variants
                 if ($step->getStepType() === 'tool_call' && 
                     $step->getToolName() === 'generate_search_variants') {
                     return $this->executeGenerateSearchVariants($step, $context, $sessionId);
@@ -225,31 +205,43 @@ final class EnhancedWorkflowExecutor
     }
 
     /**
-     * ✅ NEU: Generiert Search-Varianten (erkannt als "Tool")
+     * 🔧 FIX: Generiert Search-Varianten UND aktualisiert Context DIREKT
      */
     private function executeGenerateSearchVariants(
         WorkflowStep $step,
-        array &$context,
+        array &$context, // 🔧 FIX: Referenz!
         string $sessionId
     ): array {
+        // Hole Parameter
         $params = $this->contextResolver->resolveAll($step->getToolParameters(), $context);
 
         $this->logger->info('Generating search variants', [
             'params' => $params
         ]);
 
-        // Rufe SmartDecisionTrait-Methode auf
+        // 🔧 FIX: generateAndStoreSearchVariants aktualisiert $context direkt (durch Referenz)
         $this->generateAndStoreSearchVariants($params, $context);
+
+        // Logging
+        $variantCount = $context['search_variants_count'] ?? 0;
+        $firstVariant = $context['search_variants_list'][0] ?? null;
+
+        $this->logger->info('Search variants generated and stored in context', [
+            'variant_count' => $variantCount,
+            'first_variant' => $firstVariant,
+            'context_keys' => array_keys($context)
+        ]);
 
         $this->statusService->addStatus(
             $sessionId,
-            sprintf('🔍 %d Suchvarianten generiert', $context['search_variants_count'] ?? 0)
+            sprintf('🔍 %d Suchvarianten generiert', $variantCount)
         );
 
+        // Return für Step-Result
         return [
             'tool' => 'generate_search_variants',
-            'variants_generated' => $context['search_variants_count'] ?? 0,
-            'first_variant' => $context['search_variants_list'][0] ?? null
+            'variants_generated' => $variantCount,
+            'first_variant' => $firstVariant
         ];
     }
 
@@ -322,11 +314,11 @@ final class EnhancedWorkflowExecutor
     }
 
     /**
-     * ✅ VERBESSERT: executeStep nutzt ContextResolver
+     * 🔧 FIX: executeStep mit besserer Platzhalter-Auflösung
      */
     private function executeStep(WorkflowStep $step, array $context, string $sessionId, ?User $user): array
     {
-        // ✅ Löse Platzhalter in Tool-Parametern VOR Ausführung auf
+        // Löse Platzhalter in Tool-Parametern VOR Ausführung auf
         if ($step->getStepType() === 'tool_call') {
             $originalParams = $step->getToolParameters();
             $resolvedParams = $this->contextResolver->resolveAll($originalParams, $context);
@@ -334,6 +326,15 @@ final class EnhancedWorkflowExecutor
             // Prüfe auf unaufgelöste Platzhalter
             if ($this->contextResolver->hasUnresolvedPlaceholders($resolvedParams)) {
                 $unresolved = $this->contextResolver->findUnresolvedPlaceholders($resolvedParams);
+                
+                // 🔧 FIX: Bessere Fehlermeldung mit Context-Info
+                $this->logger->error('Unresolved placeholders detected', [
+                    'step' => $step->getStepNumber(),
+                    'unresolved' => $unresolved,
+                    'available_context_keys' => array_keys($context),
+                    'original_params' => $originalParams,
+                    'resolved_params' => $resolvedParams
+                ]);
                 
                 throw new \RuntimeException(
                     'Cannot execute step - unresolved placeholders: ' . implode(', ', $unresolved)
