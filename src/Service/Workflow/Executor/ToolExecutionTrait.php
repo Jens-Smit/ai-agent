@@ -12,13 +12,19 @@ use Symfony\AI\Platform\Message\MessageBag;
 
 trait ToolExecutionTrait
 {
-    /**
-     * Führt einen Tool-Call aus
-     */
     private function executeToolCall(WorkflowStep $step, array $context, string $sessionId, ?User $user): array
     {
         $toolName = $step->getToolName();
-        $parameters = $step->getToolParameters(); // ✅ Bereits aufgelöst in executeStep
+        // Parameter auflösen
+        $parameters = $this->resolveContextPlaceholders($step->getToolParameters(), $context);
+        
+        // Prüfen ob Placeholders ungelöst blieben (nur wenn Resolver verfügbar)
+        if (isset($this->contextResolver) && $this->contextResolver->hasUnresolvedPlaceholders($parameters)) {
+             $unresolved = $this->contextResolver->findUnresolvedPlaceholders($parameters);
+             throw new \RuntimeException(
+                'Cannot execute step - unresolved placeholders: ' . implode(', ', $unresolved)
+             );
+        }
 
         $this->logger->info('Executing tool call', [
             'tool' => $toolName,
@@ -27,17 +33,14 @@ trait ToolExecutionTrait
             'has_user' => $user !== null
         ]);
 
-        // ✅ E-Mail-Vorbereitung
         if ($toolName === 'send_email' || $toolName === 'SendMailTool') {
             return $this->prepareSendMailDetails($step, $parameters, $sessionId, $context, $user);
         }
 
-        // Andere Tools: User-Kontext erforderlich
         if ($toolName === 'company_career_contact_finder') {
             return $this->executeCompanyContactFinderWithFallback($step, $parameters, $context, $sessionId);
         }
 
-        // Standard Tool-Aufruf via Agent
         $prompt = sprintf(
             'Verwende das Tool "%s" mit folgenden Parametern: %s',
             $toolName,
@@ -53,9 +56,6 @@ trait ToolExecutionTrait
         ];
     }
 
-    /**
-     * Führt das CompanyCareerContactFinderTool mit Fallback-Logik aus
-     */
     private function executeCompanyContactFinderWithFallback(
         WorkflowStep $step,
         array $parameters,
@@ -120,14 +120,6 @@ trait ToolExecutionTrait
                 
                 $toolResult = ($this->contactFinderTool)($searchParam);
                 
-                $this->logger->info('Tool-Aufruf abgeschlossen', [
-                    'attempt' => $attempt,
-                    'success' => $toolResult['success'] ?? false,
-                    'has_general_email' => !empty($toolResult['general_email']),
-                    'has_application_email' => !empty($toolResult['application_email']),
-                    'contact_person' => $toolResult['contact_person'] ?? null
-                ]);
-                
                 if ($this->isContactFinderSuccessful($toolResult)) {
                     $foundResult = [
                         'tool' => $step->getToolName(),
@@ -180,9 +172,6 @@ trait ToolExecutionTrait
         return !empty($result['application_email']) || !empty($result['general_email']);
     }
 
-    /**
-     * Bereitet E-Mail vor - KEIN Fehler wenn User fehlt
-     */
     private function prepareSendMailDetails(
         WorkflowStep $step,
         array $parameters,
@@ -304,9 +293,6 @@ trait ToolExecutionTrait
         ];
     }
 
-    /**
-     * Versendet vorbereitete E-Mail mit User-Reload
-     */
     private function executeSendEmail(WorkflowStep $step, string $sessionId, ?User $user): array
     {
         $emailDetails = $step->getEmailDetails();
@@ -414,23 +400,23 @@ trait ToolExecutionTrait
         }
     }
 
-    /**
-     * ✅ SIMPLIFIED: Nutzt ContextResolver wenn verfügbar, sonst Legacy-Methode
-     */
     private function resolveContextPlaceholders(mixed $data, array $context): mixed
     {
-        // ✅ Nutze ContextResolver aus Parent-Class wenn vorhanden
+        // 🔧 FIX: Pipe-Support für Legacy erzwingen (da ContextResolver das oft nicht unterstützt)
+        // Wenn ein Pipe-Symbol gefunden wird, nutzen wir direkt die Legacy-Methode,
+        // da diese explizit für Pipes angepasst wurde.
+        if (is_string($data) && str_contains($data, '|')) {
+            return $this->resolveContextPlaceholdersLegacy($data, $context);
+        }
+
+        // Standard-Resolver nutzen wenn verfügbar
         if (isset($this->contextResolver)) {
             return $this->contextResolver->resolveAll($data, $context);
         }
 
-        // Fallback: Legacy-Methode (für Kompatibilität)
         return $this->resolveContextPlaceholdersLegacy($data, $context);
     }
 
-    /**
-     * Legacy Platzhalter-Auflösung (Fallback)
-     */
     private function resolveContextPlaceholdersLegacy(mixed $data, array $context): mixed
     {
         if (is_string($data)) {
@@ -443,6 +429,7 @@ trait ToolExecutionTrait
                         $paths = explode('|', $path);
                         foreach ($paths as $fallbackPath) {
                             $value = $this->resolveSinglePath(trim($fallbackPath), $context);
+                            // 🔧 FIX: Prüfen auf echtes NULL, nicht leeren String
                             if ($value !== null) {
                                 return $value;
                             }
@@ -451,6 +438,8 @@ trait ToolExecutionTrait
                     }
                     
                     $value = $this->resolveSinglePath($path, $context);
+                    // Wenn Wert null ist, geben wir den Original-Placeholder zurück,
+                    // damit die Validierung später fehlschlägt.
                     return $value ?? $matches[0];
                 },
                 $data
@@ -473,11 +462,18 @@ trait ToolExecutionTrait
             if (is_array($value) && isset($value[$key])) {
                 $value = $value[$key];
             } else {
+                // Key existiert nicht, aber wir müssen prüfen ob es ein NULL Wert war
+                // oder ob der Key wirklich fehlt. Hier vereinfacht: fehlt.
                 return null;
             }
         }
         
-        if (is_scalar($value) || $value === null) {
+        // 🔧 FIX: NULL muss NULL bleiben für die Pipe-Logik!
+        if ($value === null) {
+            return null;
+        }
+        
+        if (is_scalar($value)) {
             return (string)$value;
         }
         

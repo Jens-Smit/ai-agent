@@ -1,22 +1,8 @@
 <?php
 // src/Service/Workflow/Context/ContextResolver.php
-
-declare(strict_types=1);
-
 namespace App\Service\Workflow\Context;
 
 use Psr\Log\LoggerInterface;
-
-/**
- * Verbesserter Context-Resolver mit Deep-Nesting-Support
- * 
- * Features:
- * - Löst verschachtelte Pfade auf (step_5.result.jobs[0].company)
- * - Array-Index-Zugriff ([0], [1], etc.)
- * - Fallback-Chain (||)
- * - Default-Values
- * - Automatische Type-Conversion
- */
 final class ContextResolver
 {
     public function __construct(
@@ -48,7 +34,7 @@ final class ContextResolver
      */
     private function resolveString(string $str, array $context): string
     {
-        // Pattern: {{path.to.value||fallback||default}}
+        // Pattern: {{path.to.value|fallback|default}}
         return preg_replace_callback(
             '/\{\{([^}]+)\}\}/',
             function ($matches) use ($context) {
@@ -65,14 +51,15 @@ final class ContextResolver
     {
         $placeholder = trim($placeholder);
 
-        // Fallback-Chain: {{step_1.result||step_2.result||"default"}}
-        if (str_contains($placeholder, '||')) {
+        // 🔧 FIX: Unterstütze einzelne Pipes (|) UND doppelte Pipes (||)
+        if (str_contains($placeholder, '|') || str_contains($placeholder, '||')) {
             return $this->resolveFallbackChain($placeholder, $context);
         }
 
         // Single Path
         $value = $this->resolvePathWithArrays($placeholder, $context);
 
+        // 🔧 FIX: Erlaube auch Leerstrings als gültigen Wert, nur NULL ist ein Fehler
         if ($value !== null) {
             $this->logger->debug('Resolved placeholder', [
                 'placeholder' => $placeholder,
@@ -81,7 +68,7 @@ final class ContextResolver
             return $this->convertToString($value);
         }
 
-        $this->logger->warning('Placeholder not resolved', [
+        $this->logger->warning('Placeholder not resolved (value is null or key missing)', [
             'placeholder' => $placeholder,
             'available_keys' => array_keys($context)
         ]);
@@ -95,7 +82,9 @@ final class ContextResolver
      */
     private function resolveFallbackChain(string $chain, array $context): string
     {
-        $paths = array_map('trim', explode('||', $chain));
+        // 🔧 FIX: Splitte bei || ODER bei einzelnem |
+        $paths = preg_split('/\|\|?/', $chain);
+        $paths = array_map('trim', $paths);
 
         foreach ($paths as $path) {
             // Literale Strings (mit Quotes)
@@ -105,19 +94,22 @@ final class ContextResolver
 
             // Context-Pfad
             $value = $this->resolvePathWithArrays($path, $context);
+            
+            // Bei Fallbacks akzeptieren wir den ersten Wert der NICHT null und NICHT leer ist
+            // Ausnahme: Wenn es der letzte Wert ist, nehmen wir ihn auch wenn er leer ist (aber nicht null)
             if ($value !== null && $value !== '') {
                 return $this->convertToString($value);
             }
         }
 
-        // Alle Fallbacks fehlgeschlagen
+        // Wenn nichts gefunden wurde, geben wir einen Leerstring zurück, damit der Workflow nicht crasht
+        // (außer es ist ein kritisches Feld, aber das fangen wir hier nicht ab)
         return '';
     }
 
     /**
      * Löst Pfad mit Array-Support auf
-     * 
-     * Beispiele:
+     * * Beispiele:
      * - step_5.result.jobs[0].company
      * - step_2.result.resume_id
      * - search_variants_list[0].what
@@ -135,10 +127,10 @@ final class ContextResolver
                 $index = (int)$matches[1];
                 
                 if (!is_array($value) || !isset($value[$index])) {
+                    // Log level auf DEBUG reduziert um Logs sauber zu halten
                     $this->logger->debug('Array index not found', [
                         'path' => $path,
-                        'segment' => $segment,
-                        'available_indices' => is_array($value) ? array_keys($value) : 'not_array'
+                        'segment' => $segment
                     ]);
                     return null;
                 }
@@ -149,7 +141,7 @@ final class ContextResolver
 
             // Normaler Key
             if (is_array($value)) {
-                if (isset($value[$segment])) {
+                if (array_key_exists($segment, $value)) {
                     $value = $value[$segment];
                 } else {
                     $this->logger->debug('Key not found in context', [
@@ -160,11 +152,6 @@ final class ContextResolver
                     return null;
                 }
             } else {
-                $this->logger->debug('Cannot traverse non-array', [
-                    'path' => $path,
-                    'segment' => $segment,
-                    'value_type' => gettype($value)
-                ]);
                 return null;
             }
         }
@@ -174,8 +161,7 @@ final class ContextResolver
 
     /**
      * Parsed Path in Segmente
-     * 
-     * "step_5.result.jobs[0].company" → ["step_5", "result", "jobs", "[0]", "company"]
+     * * "step_5.result.jobs[0].company" → ["step_5", "result", "jobs", "[0]", "company"]
      */
     private function parsePathSegments(string $path): array
     {

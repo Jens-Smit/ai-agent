@@ -420,7 +420,7 @@ final class DynamicWorkflowPlanner
                 "tool": "send_email",
                 "requires_confirmation": true,
                 "parameters": {
-                    "to": "{{step_7.result.application_email}}",
+                    "to": "{{step_7.result.application_email|step_7.result.general_email}}",
                     "subject": "Bewerbung als {{step_6.result.job_title}}",
                     "body": "{{step_8.result.cover_letter_text}}",
                     "attachments": ["{{step_2.result.resume_id}}"]

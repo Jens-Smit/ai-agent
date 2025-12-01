@@ -45,7 +45,9 @@ final class WorkflowExecutor
         private AgentStatusService $statusService,
         private LoggerInterface $logger,
         private CompanyCareerContactFinderTool $contactFinderTool,
-    ) {}
+    ) {
+        $this->contextResolver = new ContextResolver($this->logger);
+    }
 
     /**
      * ✅ VERBESSERT: Workflow-Execution mit User-Persistence und korrekter Pausierung
