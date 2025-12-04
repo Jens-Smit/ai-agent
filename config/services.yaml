@@ -73,14 +73,10 @@ services:
     App\Service\Workflow\WorkflowExecutor:
         arguments:
             $agent: '@ai.agent.personal_assistent'
-            $platform: '@ai.traceable_platform.gemini'
+         
 
     
 
-    App\Service\WorkflowEngine:
-        arguments:
-            $planner: '@App\Service\Workflow\WorkflowPlanner'
-            $executor: '@App\Service\Workflow\WorkflowExecutor'
 
     # AgentStatusService mit EntityManager
     App\Service\AgentStatusService:

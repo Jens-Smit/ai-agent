@@ -16,6 +16,15 @@ use Symfony\AI\Platform\Message\MessageBag;
 use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
+/**
+ * EINZIGER Workflow-Planner im System
+ * 
+ * Verantwortlichkeiten:
+ * - Analysiert User-Intent
+ * - Prüft verfügbare Daten (Dokumente, Parameter)
+ * - Erstellt Workflow mit Steps
+ * - Validiert Plan
+ */
 final class WorkflowPlanner
 {
     public function __construct(
@@ -26,284 +35,209 @@ final class WorkflowPlanner
         private Security $security
     ) {}
 
-    public function createWorkflowFromIntent(string $userIntent, string $sessionId): Workflow
+    /**
+     * Hauptmethode: Erstellt Workflow aus User-Intent
+     */
+    public function createWorkflow(string $intent, string $sessionId): Workflow
     {
         /** @var User $user */
         $user = $this->security->getUser();
         
-        $messages = new MessageBag(
-            Message::forSystem($this->getWorkflowPlanningPrompt()),
-            Message::ofUser($userIntent)
-        );
-
-        $result = $this->agent->call($messages);
-        $plan = $this->parseWorkflowPlan($result->getContent());
-
-        $plan = $this->validateAndOptimizePlan($plan);
-
-        $workflow = new Workflow();
-        $workflow->setSessionId($sessionId);
-        $workflow->setUserIntent($userIntent);
-        $workflow->setStatus('created');
-        $workflow->setUser($user);
-
-        foreach ($plan['steps'] as $index => $stepData) {
-            $step = $this->createStep($workflow, $index + 1, $stepData);
-            $workflow->addStep($step);
+        if (!$user) {
+            throw new \RuntimeException('User authentication required');
         }
 
+        // 1. Analysiere verfügbare Daten
+        $context = $this->analyzeContext($intent, $user);
+        
+        // 2. Validiere: Dokumente vorhanden?
+        if (!($context['has_documents'] ?? false)) {
+            throw new \RuntimeException(
+                'Keine Dokumente gefunden. Bitte lade zuerst einen Lebenslauf hoch.'
+            );
+        }
+        
+        $this->logger->info('Context analyzed', [
+            'session' => $sessionId,
+            'document_count' => $context['document_count'],
+            'has_job_params' => $context['has_job_what'] && $context['has_job_where']
+        ]);
+
+        // 3. Erstelle Plan via Agent
+        $plan = $this->createPlan($intent, $context);
+        
+        // 4. Validiere Plan
+        $this->validatePlan($plan);
+
+        // 5. Baue Workflow-Objekt
+        $workflow = new Workflow();
+        $workflow->setSessionId($sessionId);
+        $workflow->setUserIntent($intent);
+        $workflow->setStatus('created');
+        $workflow->setUser($user);
+        $workflow->requireApproval();
+
+        // 6. Erstelle Steps
+        $this->createSteps($workflow, $plan);
+
+        // 7. Persistiere
         $this->em->persist($workflow);
         $this->em->flush();
 
         $this->logger->info('Workflow created', [
             'workflow_id' => $workflow->getId(),
-            'steps_count' => count($plan['steps']),
-            'session' => $sessionId
+            'steps_count' => $workflow->getSteps()->count()
         ]);
 
         return $workflow;
     }
 
-    private function createStep(Workflow $workflow, int $stepNumber, array $stepData): WorkflowStep
+    /**
+     * Analysiert verfügbare Daten und Context
+     */
+    private function analyzeContext(string $intent, User $user): array
     {
-        $step = new WorkflowStep();
-        $step->setWorkflow($workflow);
-        $step->setStepNumber($stepNumber);
-        $step->setStepType($stepData['type']);
-        $step->setDescription($stepData['description']);
-        $step->setToolName($stepData['tool'] ?? null);
-        $step->setToolParameters($stepData['parameters'] ?? []);
-        $step->setRequiresConfirmation($stepData['requires_confirmation'] ?? false);
-        $step->setStatus('pending');
+        $context = [
+            'user_id' => $user->getId(),
+            'user_email' => $user->getEmail(),
+            'intent' => $intent
+        ];
 
-        if (isset($stepData['output_format'])) {
-            $step->setExpectedOutputFormat($stepData['output_format']);
+        // Prüfe verfügbare Dokumente
+        $documentRepo = $this->em->getRepository(\App\Entity\UserDocument::class);
+        $documents = $documentRepo->findNonSecretByUser($user);
+        
+        $context['has_documents'] = !empty($documents);
+        $context['document_count'] = count($documents);
+        
+        if (!empty($documents)) {
+            $context['document_ids'] = array_map(fn($d) => $d->getId(), $documents);
+            
+            // Gruppiere nach Kategorien
+            $byCategory = [];
+            foreach ($documents as $doc) {
+                $category = $doc->getCategory() ?? 'other';
+                $byCategory[$category][] = [
+                    'id' => $doc->getId(),
+                    'name' => $doc->getDisplayName() ?? $doc->getOriginalFilename()
+                ];
+            }
+            $context['documents_by_category'] = $byCategory;
         }
 
-        return $step;
+        // Extrahiere Job-Parameter aus Intent
+        $jobParams = $this->extractJobParameters($intent);
+        $context = array_merge($context, $jobParams);
+
+        return $context;
     }
 
-    private function validateAndOptimizePlan(array $plan): array
+    /**
+     * Extrahiert Job-Suchparameter (was, wo) aus Intent
+     */
+    private function extractJobParameters(string $intent): array
     {
-        if (!isset($plan['steps']) || !is_array($plan['steps']) || empty($plan['steps'])) {
-            throw new \RuntimeException('Invalid workflow plan: missing or empty steps array');
-        }
+        $params = [
+            'has_job_what' => false,
+            'has_job_where' => false
+        ];
 
-        foreach ($plan['steps'] as $index => &$step) {
-            if (!isset($step['type']) || !in_array($step['type'], ['tool_call', 'analysis', 'decision', 'notification'])) {
-                throw new \RuntimeException("Invalid step type at index {$index}");
-            }
+        // Was-Extraktion
+        $whatPatterns = [
+            '/als\s+([a-zäöüß\s]+?)(?:\s+in|\s+bei|\s+$)/iu',
+            '/job\s+als\s+([a-zäöüß\s]+)/iu',
+            '/stelle\s+als\s+([a-zäöüß\s]+)/iu',
+        ];
 
-            $step['description'] = $step['description'] ?? 'Keine Beschreibung';
-            $step['parameters'] = $step['parameters'] ?? [];
-            $step['requires_confirmation'] = $step['requires_confirmation'] ?? false;
-
-            if (in_array($step['type'], ['analysis', 'decision'])) {
-                if (!isset($step['output_format'])) {
-                    $step['output_format'] = $this->inferOutputFormat($step, $plan['steps'], $index);
-                }
-
-                if (isset($step['output_format']) && !isset($step['output_format']['fields'])) {
-                    $step['output_format'] = [
-                        'type' => 'object',
-                        'fields' => $step['output_format']
-                    ];
-                }
-            }
-
-            if ($step['type'] === 'tool_call' && empty($step['tool'])) {
-                throw new \RuntimeException("Missing tool name for tool_call at step {$index}");
-            }
-
-            if ($step['type'] === 'tool_call' && $step['tool'] === 'send_email') {
-                $step['parameters'] = $this->normalizeEmailAttachments($step['parameters']);
+        foreach ($whatPatterns as $pattern) {
+            if (preg_match($pattern, $intent, $matches)) {
+                $params['job_what'] = trim($matches[1]);
+                $params['has_job_what'] = true;
+                break;
             }
         }
 
-        return $plan;
-    }
+        // Wo-Extraktion
+        $wherePatterns = [
+            '/in\s+([a-zäöüß\s]+?)(?:\s+als|\s+bewerben|\s+$)/iu',
+            '/bei\s+(?:firmen\s+)?(?:in|aus)\s+([a-zäöüß\s]+)/iu',
+        ];
 
-    private function normalizeEmailAttachments(array $params): array
-    {
-        if (!isset($params['attachments'])) {
-            return $params;
-        }
-
-        $attachments = $params['attachments'];
-
-        if (is_string($attachments)) {
-            $decoded = json_decode($attachments, true);
-            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                $attachments = $decoded;
-            } else {
-                $attachments = [$attachments];
+        foreach ($wherePatterns as $pattern) {
+            if (preg_match($pattern, $intent, $matches)) {
+                $params['job_where'] = trim($matches[1]);
+                $params['has_job_where'] = true;
+                break;
             }
         }
-
-        if (is_array($attachments)) {
-            $normalized = [];
-            foreach ($attachments as $attachment) {
-                if (is_string($attachment)) {
-                    $normalized[] = [
-                        'type' => 'document_id',
-                        'value' => $attachment
-                    ];
-                } elseif (is_array($attachment)) {
-                    if (!isset($attachment['type'])) {
-                        $attachment['type'] = 'document_id';
-                    }
-                    $normalized[] = $attachment;
-                }
-            }
-            $attachments = $normalized;
-        }
-
-        $params['attachments'] = json_encode($attachments, JSON_UNESCAPED_UNICODE);
 
         return $params;
     }
 
-    private function inferOutputFormat(array $currentStep, array $allSteps, int $currentIndex): ?array
+    /**
+     * Erstellt Plan via Agent
+     */
+    private function createPlan(string $intent, array $context): array
     {
-        $requiredFields = [];
+        $prompt = $this->buildPlanningPrompt($intent, $context);
 
-        for ($i = $currentIndex + 1; $i < count($allSteps); $i++) {
-            $nextStep = $allSteps[$i];
-            $params = json_encode($nextStep['parameters'] ?? []);
+        $messages = new MessageBag(
+            Message::forSystem($prompt),
+            Message::ofUser($intent)
+        );
 
-            $stepRef = 'step_' . ($currentIndex + 1);
-            if (preg_match_all('/\{\{' . preg_quote($stepRef) . '\.result\.(\w+)\}\}/', $params, $matches)) {
-                foreach ($matches[1] as $field) {
-                    $requiredFields[$field] = 'string';
-                }
-            }
-        }
-
-        $description = $currentStep['description'] ?? '';
-        if (preg_match_all('/(\w+):\s*"([^"]+)"/', $description, $matches)) {
-            foreach ($matches[1] as $field) {
-                if (!in_array($field, ['type', 'description', 'tool'])) {
-                    $requiredFields[$field] = 'string';
-                }
-            }
-        }
-
-        if (empty($requiredFields)) {
-            return null;
-        }
-
-        return [
-            'type' => 'object',
-            'fields' => $requiredFields
-        ];
+        $result = $this->agent->call($messages);
+        
+        return $this->parsePlan($result->getContent());
     }
 
-    private function parseWorkflowPlan(string $content): array
+    /**
+     * Baut Planning-Prompt
+     */
+    private function buildPlanningPrompt(string $intent, array $context): string
     {
-        $json = null;
-
-        if (preg_match('/```(?:json)?\s*(\{.*?\})\s*```/s', $content, $matches)) {
-            $json = $matches[1];
-        } elseif (preg_match('/\{.*?\"steps\"\s*:\s*\[.*?\]\s*\}/s', $content, $matches)) {
-            $json = $matches[0];
-        } else {
-            if (preg_match('/^.*?(\{.*\}).*?$/s', $content, $matches)) {
-                $json = $matches[1];
-            }
-        }
-
-        if (!$json) {
-            $this->logger->error('Could not parse workflow plan: No JSON structure found.', [
-                'content_preview' => substr($content, 0, 500)
-            ]);
-            throw new \RuntimeException('Could not parse workflow plan from agent response: No JSON found.');
-        }
-
-        $json = preg_replace('/\/\*(.*?)\*\//s', '', $json);
-        $json = preg_replace('/\/\/.*$/m', '', $json);
-        $json = preg_replace('/,\s*([\]\}])/', '$1', $json);
+        $contextJson = json_encode($context, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         
-        $json = trim($json);
-        if (!str_starts_with($json, '{') && !str_starts_with($json, '[')) {
-            $json = '{' . $json . '}';
-        }
-
-        $plan = json_decode($json, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            $this->logger->error('Invalid JSON after cleanup.', [
-                'json_error' => json_last_error_msg(),
-                'json_content' => $json
-            ]);
-            throw new \RuntimeException('Invalid JSON in workflow plan: ' . json_last_error_msg());
-        }
-        
-        if (!isset($plan['steps']) || !is_array($plan['steps'])) {
-            $this->logger->error('Parsed JSON is missing the required "steps" key.', [
-                'json_content' => $json
-            ]);
-            throw new \RuntimeException('Parsed JSON is not a valid workflow plan (missing "steps" array).');
-        }
-
-        return $plan;
-    }
-
-    private function getWorkflowPlanningPrompt(): string
-    {
         return <<<PROMPT
-Du bist ein intelligenter Workflow-Planer. Erstelle IMMER EFFIZIENTE, OPTIMIERTE, strukturierte, ausführbare Workflows basierend auf der User-Anfrage.
+Du bist ein Workflow-Planer. Erstelle strukturierte, ausführbare Workflows.
 
-🎯 KRITISCHE REGELN:
-
-1. **NUTZE USER-EINGABEN**: Wenn der User "Job als Entwickler in Lübeck" sagt, dann SPRINGE DIREKT zur Jobsuche mit diesen Werten!
-2. **KEINE UNNÖTIGEN STEPS**: Überspringe Dokument-Analyse wenn 'was' und 'wo' bereits bekannt sind
-3. **INTELLIGENTE REIHENFOLGE**: 
-   - User gibt Job+Ort an → Jobsuche → Firmenkontakte → Lebenslauf laden → Anschreiben → E-Mail
-   - User gibt NUR "bewerbe dich" → Lebenslauf laden → Job-Parameter extrahieren → Jobsuche → Rest
-4. **Output-Format**:  enthält die EXAKTEN Feldnamen, die nachfolgende Steps benötigen
-5. **Bestätigung**: requires_confirmation: true NUR für E-Mails
-6. Verwende {{step_N.result.FELDNAME}} um auf Felder zuzugreifen
-
-STEP-TYPES:
-- tool_call: Ruft ein Tool auf
-- analysis: Analysiert Daten → MUSS output_format haben
-- decision: Trifft Entscheidung → MUSS output_format haben
-- notification: Sendet Nachricht
-
-📋 VERFÜGBARE TOOLS:
+🎯 VERFÜGBARE TOOLS:
 
 **Job-Suche:**
--  job_search: Sucht Stellenangebote (Parameter: what, where, radius)
-  - Beispiel: {"what": "Entwickler", "where": "Lübeck", "radius": 25}
-- company_career_contact_finder: Findet Karriere-Kontakte (Parameter: company_name)
+- job_search: {"what": "Entwickler", "where": "Lübeck", "radius": 25}
+- company_career_contact_finder: {"company_name": "Firma"}
 
 **Dokumente:**
-- user_document_search: Sucht Dokumente (Parameter: searchTerm, category)
-- user_document_read: Liest Dokument (Parameter: identifier)
-- user_document_list: Listet Dokumente (Parameter: category)
+- user_document_search: {"searchTerm": "Lebenslauf", "category": "resume"}
+- user_document_read: {"identifier": "doc_id"}
+- user_document_list: {"category": "resume"}
 
 **Kommunikation:**
-- send_email: Versendet E-Mail (Parameter: to, subject, body, attachments)
-  - body: Kann langen Text enthalten - KEIN PDF nötig!
-  - attachments: Format: ["{{step_N.result.resume_id}}"] oder ["3"]
+- send_email: {
+    "to": "email@example.com",
+    "subject": "Betreff",
+    "body": "Vollständiger Text (kein PDF nötig!)",
+    "attachments": ["{{step_N.result.resume_id}}"]
+  }
 
-**Web:**
-- google_search: Google-Suche (Parameter: query)
-- web_scraper: Scraped Webseite (Parameter: url)
+**WICHTIG für E-Mails:**
+- Pipe-Fallback verwenden: {{step_X.result.application_email|step_X.result.general_email}}
+- Body enthält vollständigen Text (kein PDF generieren!)
+- Attachments sind Dokument-IDs
 
-🎨 OPTIMIERTE BEWERBUNGS-WORKFLOWS:
+🎨 WORKFLOW-MUSTER:
 
-**Variante A: User gibt Job-> what und Ort-> where an (BEVORZUGT)**
+**Mit Job+Ort (User gibt an):**
 ```json
 {
   "steps": [
-    {"type": "tool_call", "tool": "job_search", "parameters": {"what": "Entwickler", "where": "Hamburg", "size": 1}},
-    {"type": "analysis", "description": "Extrahiere Job-Details", 
+    {"type": "tool_call", "tool": "job_search", "parameters": {"what": "Job", "where": "Ort"}},
+    {"type": "decision", "description": "Wähle besten Job", "requires_confirmation": true,
      "output_format": {"job_title": "string", "company_name": "string", "job_url": "string"}},
     {"type": "tool_call", "tool": "company_career_contact_finder", 
      "parameters": {"company_name": "{{step_2.result.company_name}}"}},
     {"type": "tool_call", "tool": "user_document_search", 
-     "parameters": {"searchTerm": "Lebenslauf", "category": "resume"}},
+     "parameters": {"searchTerm": "Lebenslauf"}},
     {"type": "analysis", "description": "Extrahiere Lebenslauf-ID",
      "output_format": {"resume_id": "string"}},
     {"type": "analysis", "description": "Erstelle Bewerbungstext",
@@ -319,119 +253,136 @@ STEP-TYPES:
 }
 ```
 
-**Variante B: User sagt nur "bewerbe dich", "suche mir einen Job", "ich will mich beruflich verändern (ohne Job/Ort)**
-```json
-{
-  "steps": [
-    {
-      "type": "tool_call",
-      "tool": "user_document_list",
-      "description": "Liste Dokumente",
-      "parameters": {}
-    },
-    {
-      "type": "analysis",
-      "description": "Identifiziere Lebenslauf",
-      "output_format": {
-        "resume_id": "string"
-      }
-    },
-    {
-      "type": "tool_call",
-      "tool": "user_document_read",
-      "description": "Lese Lebenslauf",
-      "parameters": {
-        "identifier": "{{step_2.result.resume_id}}"
-      }
-    },
-    {
-      "type": "analysis",
-      "description": "Extrahiere Job-Parameter aus Lebenslauf",
-      "output_format": {
-        "job_title": "string",
-        "job_location": "string"
-      }
-    },
-    {
-      "type": "tool_call",
-      "tool": "job_search",
-      "description": "Suche Jobs mit extrahierten Parametern",
-      "parameters": {
-        "what": "{{step_4.result.job_title}}",
-        "where": "{{step_4.result.job_location}}",
-        "radius": 25
-      }
-    },
-    {
-      "type": "analysis",
-      "description": "Wähle besten Job",
-      "output_format": {
-        "job_title": "string",
-        "company_name": "string",
-        "job_url": "string"
-      }
-    },
-    {
-      "type": "tool_call",
-      "tool": "company_career_contact_finder",
-      "parameters": {
-        "company_name": "{{step_6.result.company_name}}"
-      }
-    },
-    {
-      "type": "analysis",
-      "description": "Erstelle Anschreiben",
-      "output_format": {
-        "cover_letter_text": "string"
-      }
-    },
-    {
-      "type": "tool_call",
-      "tool": "send_email",
-      "requires_confirmation": true,
-      "parameters": {
-        "to": "{{step_7.result.application_email|step_7.result.general_email}}",
-        "subject": "Bewerbung als {{step_6.result.job_title}}",
-        "body": "{{step_8.result.cover_letter_text}}",
-        "attachments": ["{{step_2.result.resume_id}}"]
-      }
-    }
-  ]
-}
-```
+**Ohne Job-Parameter:**
+- Zuerst Dokument laden
+- Job-Parameter aus Lebenslauf extrahieren
+- Dann job_search
 
-⚡ OPTIMIERUNGSREGELN:
+⚡ REGELN:
+1. Nutze User-Eingaben direkt wenn vorhanden
+2. Job-Auswahl MUSS requires_confirmation=true haben
+3. E-Mails MÜSSEN requires_confirmation=true haben
+4. Verwende IMMER Pipe-Fallback für E-Mails
+5. Antworte NUR mit JSON (kein Markdown-Fencing!)
 
-1. **Erkenne explizite Parameter**:
-   - "als Entwickler in Lübeck" → what="Entwickler", where="Lübeck"
-   - nutze Variante A immer wenn möglich, nur wenn keine Parameter → Variante B
+CONTEXT:
+{$contextJson}
 
-2. **Minimale Steps**:
-   - Mit Job+Ort: 8 Steps (Suche → Auswahl → Kontakte → Lebenslauf → Anschreiben → E-Mail)
-   - Ohne Parameter: +2-3 Steps für Extraktion
-
-3. **KEINE Search-Varianten-Generation**:
-   - Wenn User konkrete Eingaben macht, nutze diese DIREKT
-   - Keine generate_search_variants, keine Retry-Loops
-
-4. **Text direkt in E-Mail**:
-   - Anschreiben im body, KEIN PDF
-   - Nur Lebenslauf als Anhang
-
-5. **Ein Job = Ein Anschreiben**:
-   - Wähle EINEN besten Job aus
-   - KEINE Iterationen über multiple Jobs
-
-5. **das request_tool_development Tool wird nur dann verwendet, wenn es keine andere Möglichkeit gibt das anliegen zu bearbeiten**
-
-OUTPUT-FORMAT (NUR JSON):
-```json
-{
-  "steps": [...]
-}
-```
-
-WICHTIG: Analysiere die User-Anfrage und erkenne vorhandene Parameter!
+OUTPUT (NUR JSON):
 PROMPT;
+    }
+
+    /**
+     * Parsed Plan-Response
+     */
+    private function parsePlan(string $content): array
+    {
+        $this->logger->debug('Parsing plan', [
+            'content_preview' => substr($content, 0, 200)
+        ]);
+
+        // Extrahiere JSON
+        if (preg_match('/```(?:json)?\s*(\{.*?\})\s*```/s', $content, $matches)) {
+            $json = $matches[1];
+        } elseif (preg_match('/\{.*?"steps"\s*:\s*\[.*?\]\s*\}/s', $content, $matches)) {
+            $json = $matches[0];
+        } else {
+            throw new \RuntimeException('Kein gültiges JSON im Plan gefunden');
+        }
+
+        // Bereinige JSON
+        $json = preg_replace('/\/\*(.*?)\*\//s', '', $json);
+        $json = preg_replace('/\/\/.*$/m', '', $json);
+        $json = preg_replace('/,\s*([\]\}])/', '$1', $json);
+
+        $plan = json_decode($json, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new \RuntimeException('JSON Parse Error: ' . json_last_error_msg());
+        }
+
+        if (!isset($plan['steps']) || !is_array($plan['steps'])) {
+            throw new \RuntimeException('Plan enthält kein steps-Array');
+        }
+
+        return $plan;
+    }
+
+    /**
+     * Validiert Plan
+     */
+    private function validatePlan(array $plan): void
+    {
+        if (empty($plan['steps'])) {
+            throw new \RuntimeException('Plan enthält keine Steps');
+        }
+
+        foreach ($plan['steps'] as $index => $step) {
+            // Erforderliche Felder
+            if (!isset($step['type'])) {
+                throw new \RuntimeException("Step {$index}: Fehlendes Feld 'type'");
+            }
+
+            $validTypes = ['tool_call', 'analysis', 'decision', 'notification'];
+            if (!in_array($step['type'], $validTypes)) {
+                throw new \RuntimeException("Step {$index}: Ungültiger type '{$step['type']}'");
+            }
+
+            // tool_call braucht tool
+            if ($step['type'] === 'tool_call' && empty($step['tool'])) {
+                throw new \RuntimeException("Step {$index}: tool_call ohne 'tool'");
+            }
+
+            // analysis/decision sollten output_format haben
+            if (in_array($step['type'], ['analysis', 'decision']) && !isset($step['output_format'])) {
+                $this->logger->warning("Step {$index}: {$step['type']} ohne output_format");
+            }
+        }
+    }
+
+    /**
+     * Erstellt Steps aus Plan
+     */
+    private function createSteps(Workflow $workflow, array $plan): void
+    {
+        foreach ($plan['steps'] as $index => $stepData) {
+            $step = new WorkflowStep();
+            $step->setWorkflow($workflow);
+            $step->setStepNumber($index + 1);
+            $step->setStepType($stepData['type']);
+            $step->setDescription($stepData['description'] ?? "Step {$index}");
+            $step->setToolName($stepData['tool'] ?? null);
+            $step->setToolParameters($stepData['parameters'] ?? []);
+            $step->setRequiresConfirmation($stepData['requires_confirmation'] ?? false);
+            $step->setStatus('pending');
+
+            if (isset($stepData['output_format'])) {
+                $step->setExpectedOutputFormat($this->normalizeOutputFormat($stepData['output_format']));
+            }
+
+            $workflow->addStep($step);
+        }
+    }
+
+    /**
+     * Normalisiert output_format
+     */
+    private function normalizeOutputFormat(mixed $format): array
+    {
+        if (!is_array($format)) {
+            return ['type' => 'object', 'fields' => ['result' => 'string']];
+        }
+
+        // Wenn nur fields, wrappe in type: object
+        if (isset($format['fields']) && !isset($format['type'])) {
+            $format['type'] = 'object';
+        }
+
+        // Wenn nur Felder ohne Struktur
+        if (!isset($format['type']) && !isset($format['fields'])) {
+            return ['type' => 'object', 'fields' => $format];
+        }
+
+        return $format;
     }
 }

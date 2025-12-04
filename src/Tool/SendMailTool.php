@@ -41,10 +41,13 @@ final class SendMailTool
         string $to,
         string $subject,
         string $body,
-        string $attachments = ''
+        string $attachments = '',
+        ?User $user = null
     ): array {
-        /** @var User|null $user */
-        $user = $this->security->getUser();
+        if (!$user) {
+            /** @var User|null $user */
+            $user = $this->security->getUser();
+        }
         $hasAttachments = !empty(trim($attachments));
         
         $preparedDetails = $this->getPreparedEmailDetails($to, $subject, $body, $attachments, $user);

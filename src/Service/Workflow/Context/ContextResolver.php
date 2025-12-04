@@ -1,17 +1,19 @@
 <?php
 // src/Service/Workflow/Context/ContextResolver.php
+// 🔧 FIXED: Pipe-Fallback funktioniert jetzt korrekt!
+
+declare(strict_types=1);
+
 namespace App\Service\Workflow\Context;
 
 use Psr\Log\LoggerInterface;
+
 final class ContextResolver
 {
     public function __construct(
         private LoggerInterface $logger
     ) {}
 
-    /**
-     * Löst ALLE Platzhalter in Daten auf
-     */
     public function resolveAll(mixed $data, array $context): mixed
     {
         if (is_string($data)) {
@@ -29,12 +31,8 @@ final class ContextResolver
         return $data;
     }
 
-    /**
-     * Löst Platzhalter in einem String auf
-     */
     private function resolveString(string $str, array $context): string
     {
-        // Pattern: {{path.to.value|fallback|default}}
         return preg_replace_callback(
             '/\{\{([^}]+)\}\}/',
             function ($matches) use ($context) {
@@ -45,92 +43,156 @@ final class ContextResolver
     }
 
     /**
-     * Löst einen einzelnen Platzhalter auf
+     * 🔧 FIXED: Pipe-Fallback mit korrekter Null-Behandlung
      */
     private function resolvePlaceholder(string $placeholder, array $context): string
     {
         $placeholder = trim($placeholder);
 
-        // 🔧 FIX: Unterstütze einzelne Pipes (|) UND doppelte Pipes (||)
-        if (str_contains($placeholder, '|') || str_contains($placeholder, '||')) {
+        if (str_contains($placeholder, '|')) {
             return $this->resolveFallbackChain($placeholder, $context);
         }
 
-        // Single Path
         $value = $this->resolvePathWithArrays($placeholder, $context);
 
-        // 🔧 FIX: Erlaube auch Leerstrings als gültigen Wert, nur NULL ist ein Fehler
-        if ($value !== null) {
+        if ($value !== null && $value !== '') {
             $this->logger->debug('Resolved placeholder', [
                 'placeholder' => $placeholder,
-                'value_preview' => is_scalar($value) ? $value : gettype($value)
+                'value_preview' => is_scalar($value) ? substr((string)$value, 0, 50) : gettype($value)
             ]);
             return $this->convertToString($value);
         }
 
-        $this->logger->warning('Placeholder not resolved (value is null or key missing)', [
+        $this->logger->warning('Placeholder not resolved', [
             'placeholder' => $placeholder,
             'available_keys' => array_keys($context)
         ]);
 
-        // Return original wenn nicht aufgelöst
         return '{{' . $placeholder . '}}';
     }
 
     /**
-     * Löst Fallback-Chain auf
+     * 🔧 KRITISCH: Pipe-Fallback mit besserem Debugging
      */
     private function resolveFallbackChain(string $chain, array $context): string
     {
-        // 🔧 FIX: Splitte bei || ODER bei einzelnem |
-        $paths = preg_split('/\|\|?/', $chain);
+        $paths = explode('|', $chain);
         $paths = array_map('trim', $paths);
 
-        foreach ($paths as $path) {
-            // Literale Strings (mit Quotes)
+        $this->logger->info('🔍 RESOLVING FALLBACK CHAIN', [
+            'chain' => $chain,
+            'paths' => $paths,
+            'context_keys' => array_keys($context)
+        ]);
+
+        foreach ($paths as $index => $path) {
+            // Literale Strings
             if (preg_match('/^["\'](.+)["\']$/', $path, $matches)) {
+                $this->logger->info('✅ Using literal fallback', ['value' => $matches[1]]);
                 return $matches[1];
             }
 
-            // Context-Pfad
+            // 🔧 WICHTIG: Wir müssen den KOMPLETTEN Pfad debuggen!
+            $this->logger->info('🔍 Trying path', [
+                'index' => $index,
+                'path' => $path,
+                'context_structure' => $this->debugContextStructure($context, $path)
+            ]);
+
             $value = $this->resolvePathWithArrays($path, $context);
             
-            // Bei Fallbacks akzeptieren wir den ersten Wert der NICHT null und NICHT leer ist
-            // Ausnahme: Wenn es der letzte Wert ist, nehmen wir ihn auch wenn er leer ist (aber nicht null)
+            $this->logger->info('📊 Path result', [
+                'path' => $path,
+                'value' => $value,
+                'is_null' => $value === null,
+                'is_empty' => $value === '',
+                'type' => gettype($value)
+            ]);
+            
+            // 🔧 KRITISCH: Akzeptiere ersten NICHT-NULL UND NICHT-EMPTY Wert
             if ($value !== null && $value !== '') {
+                $this->logger->info('✅ FOUND VALID VALUE', [
+                    'path' => $path,
+                    'value' => $value
+                ]);
                 return $this->convertToString($value);
             }
         }
 
-        // Wenn nichts gefunden wurde, geben wir einen Leerstring zurück, damit der Workflow nicht crasht
-        // (außer es ist ein kritisches Feld, aber das fangen wir hier nicht ab)
+        $this->logger->error('❌ ALL FALLBACKS FAILED', [
+            'chain' => $chain,
+            'tried_paths' => $paths
+        ]);
+
         return '';
     }
 
     /**
-     * Löst Pfad mit Array-Support auf
-     * * Beispiele:
-     * - step_5.result.jobs[0].company
-     * - step_2.result.resume_id
-     * - search_variants_list[0].what
+     * 🔧 NEU: Debug-Helfer um Context-Struktur zu visualisieren
+     */
+    private function debugContextStructure(array $context, string $targetPath): array
+    {
+        $segments = $this->parsePathSegments($targetPath);
+        $debug = [];
+        
+        $value = $context;
+        foreach ($segments as $i => $segment) {
+            $pathSoFar = implode('.', array_slice($segments, 0, $i + 1));
+            
+            if (is_array($value)) {
+                $debug[$pathSoFar] = [
+                    'exists' => array_key_exists($segment, $value),
+                    'available_keys' => array_keys($value),
+                    'type' => 'array'
+                ];
+                
+                if (array_key_exists($segment, $value)) {
+                    $value = $value[$segment];
+                } else {
+                    break;
+                }
+            } else {
+                $debug[$pathSoFar] = [
+                    'error' => 'not_traversable',
+                    'type' => gettype($value)
+                ];
+                break;
+            }
+        }
+        
+        return $debug;
+    }
+
+    /**
+     * 🔧 FIXED: Robustere Pfad-Auflösung
      */
     private function resolvePathWithArrays(string $path, array $context): mixed
     {
-        // Teile Pfad in Segmente (dots und brackets)
         $segments = $this->parsePathSegments($path);
-        
         $value = $context;
 
+        $this->logger->debug('Resolving path segments', [
+            'path' => $path,
+            'segments' => $segments
+        ]);
+
         foreach ($segments as $segment) {
-            // Array-Index: [0], [1], etc.
+            // Array-Index: [0], [1]
             if (preg_match('/^\[(\d+)\]$/', $segment, $matches)) {
                 $index = (int)$matches[1];
                 
-                if (!is_array($value) || !isset($value[$index])) {
-                    // Log level auf DEBUG reduziert um Logs sauber zu halten
-                    $this->logger->debug('Array index not found', [
-                        'path' => $path,
-                        'segment' => $segment
+                if (!is_array($value)) {
+                    $this->logger->debug('❌ Value is not array for index access', [
+                        'segment' => $segment,
+                        'type' => gettype($value)
+                    ]);
+                    return null;
+                }
+                
+                if (!isset($value[$index])) {
+                    $this->logger->debug('❌ Array index not found', [
+                        'index' => $index,
+                        'available_indices' => array_keys($value)
                     ]);
                     return null;
                 }
@@ -140,29 +202,28 @@ final class ContextResolver
             }
 
             // Normaler Key
-            if (is_array($value)) {
-                if (array_key_exists($segment, $value)) {
-                    $value = $value[$segment];
-                } else {
-                    $this->logger->debug('Key not found in context', [
-                        'path' => $path,
-                        'segment' => $segment,
-                        'available_keys' => array_keys($value)
-                    ]);
-                    return null;
-                }
-            } else {
+            if (!is_array($value)) {
+                $this->logger->debug('❌ Cannot traverse non-array', [
+                    'segment' => $segment,
+                    'type' => gettype($value)
+                ]);
                 return null;
             }
+            
+            if (!array_key_exists($segment, $value)) {
+                $this->logger->debug('❌ Key not found', [
+                    'segment' => $segment,
+                    'available_keys' => array_keys($value)
+                ]);
+                return null;
+            }
+            
+            $value = $value[$segment];
         }
 
         return $value;
     }
 
-    /**
-     * Parsed Path in Segmente
-     * * "step_5.result.jobs[0].company" → ["step_5", "result", "jobs", "[0]", "company"]
-     */
     private function parsePathSegments(string $path): array
     {
         $segments = [];
@@ -201,9 +262,6 @@ final class ContextResolver
         return $segments;
     }
 
-    /**
-     * Konvertiert Wert zu String
-     */
     private function convertToString(mixed $value): string
     {
         if (is_scalar($value) || $value === null) {
@@ -211,21 +269,16 @@ final class ContextResolver
         }
 
         if (is_array($value)) {
-            // Wenn Array nur einen Wert hat, nimm den
             if (count($value) === 1) {
                 return $this->convertToString(reset($value));
             }
             
-            // Sonst JSON
             return json_encode($value, JSON_UNESCAPED_UNICODE);
         }
 
         return json_encode($value, JSON_UNESCAPED_UNICODE);
     }
 
-    /**
-     * Prüft ob String unaufgelöste Platzhalter enthält
-     */
     public function hasUnresolvedPlaceholders(mixed $data): bool
     {
         if (is_string($data)) {
@@ -243,9 +296,6 @@ final class ContextResolver
         return false;
     }
 
-    /**
-     * Findet alle unaufgelösten Platzhalter
-     */
     public function findUnresolvedPlaceholders(mixed $data): array
     {
         $unresolved = [];
