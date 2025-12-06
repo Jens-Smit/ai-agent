@@ -187,10 +187,11 @@ class TokenTrackingService
                 default => throw new \InvalidArgumentException("Invalid period: $period")
             };
         }
-
-        $totalTokens = $this->tokenUsageRepo->getUsageInTimeframe($user, $startDate, $endDate);
-        $breakdown = $this->tokenUsageRepo->getUsageBreakdown($user, $startDate, $endDate);
-        $settings = $this->getOrCreateSettings($user);
+        $DTIstartDate = (new \DateTimeImmutable())->setTimestamp($startDate->getTimestamp());
+        $DTIendDate = (new \DateTimeImmutable())->setTimestamp($endDate->getTimestamp());
+        $totalTokens = $this->tokenUsageRepo->getUsageInTimeframe($user, $DTIstartDate, $DTIendDate);
+        $breakdown = $this->tokenUsageRepo->getUsageBreakdown($user, $DTIstartDate, $DTIendDate);
+        //$settings = $this->getOrCreateSettings($user);
 
         $totalCost = array_sum(array_column($breakdown, 'cost_cents'));
 

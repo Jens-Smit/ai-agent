@@ -5,7 +5,8 @@ use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface;
 use Symfony\Component\Security\Core\User\UserInterface;
 use App\Repository\UserRepository;
-
+use Symfony\Component\Serializer\Annotation\Ignore;
+use Symfony\Component\Serializer\Annotation\Groups;
 #[ORM\Entity(repositoryClass: UserRepository::class)]
 #[ORM\Table(name: '`user`')]
 class User implements UserInterface, PasswordAuthenticatedUserInterface
@@ -13,6 +14,7 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: 'integer')]
+    #[Groups(['user:read'])]
     private ?int $id = null;
 
     #[ORM\Column(type: 'string', length: 180, unique: true)]
@@ -70,7 +72,7 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     #[ORM\Column(type: 'datetime', nullable: true)]
     private ?\DateTimeInterface $resetTokenExpiresAt = null;
 
-    #[ORM\OneToOne(mappedBy: 'user', targetEntity: UserSettings::class, cascade: ['persist', 'remove'])]
+    #[ORM\OneToOne(mappedBy: 'user', targetEntity: UserSettings::class,fetch: 'LAZY' , cascade: ['persist', 'remove'])]
     private ?UserSettings $userSettings = null;
 
     // ==================== BASIC GETTERS/SETTERS ====================

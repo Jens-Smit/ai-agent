@@ -389,7 +389,47 @@ final class WorkflowExecutor
             'available_jobs' => $jobs
         ];
     }
+     private function sendEmail(WorkflowStep $step, User $user): array
+    {
+        $emailDetails = $step->getEmailDetails();
+        
+        if (!$emailDetails) {
+            throw new \RuntimeException('Keine E-Mail-Details vorhanden');
+        }
 
+        $attachmentPaths = [];
+        foreach ($emailDetails['attachments'] as $attachment) {
+            $document = $this->documentRepo->find($attachment['id']);
+            if ($document && $document->getUser() === $user) {
+                $attachmentPaths[] = $document->getFullPath();
+            }
+        }
+
+        $prompt = sprintf(
+            'Sende E-Mail mit folgenden Details: %s',
+            json_encode([
+                'to' => $emailDetails['recipient'],
+                'subject' => $emailDetails['subject'],
+                'body' => $emailDetails['body'],
+                'attachments' => $attachmentPaths
+            ], JSON_UNESCAPED_UNICODE)
+        );
+
+        $messages = new MessageBag(Message::ofUser($prompt));
+        $result = $this->agent->call($messages);
+
+        $this->statusService->addStatus(
+            $step->getWorkflow()->getSessionId(),
+            sprintf('✅ E-Mail gesendet an %s', $emailDetails['recipient'])
+        );
+
+        return [
+            'tool' => 'send_email',
+            'status' => 'sent',
+            'recipient' => $emailDetails['recipient'],
+            'sent_at' => (new \DateTimeImmutable())->format('c')
+        ];
+    }
     /**
      * 🔧 FIXED: E-Mail-Vorbereitung mit Status-Setzung
      */

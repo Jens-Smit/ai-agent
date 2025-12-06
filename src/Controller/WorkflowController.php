@@ -10,6 +10,7 @@ use App\Entity\WorkflowStep;
 use App\Repository\WorkflowRepository;
 use App\Service\Workflow\WorkflowPlanner;
 use App\Service\Workflow\WorkflowExecutor;
+use App\Tool\SendMailTool;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -275,6 +276,7 @@ class WorkflowController extends AbstractController
             'status' => $workflow->getStatus(),
             'current_step' => $workflow->getCurrentStep(),
             'total_steps' => $workflow->getSteps()->count(),
+            'user_intent' => $workflow->getUserIntent(),
             'steps' => $steps,
             'created_at' => $workflow->getCreatedAt()->format('c'),
             'completed_at' => $workflow->getCompletedAt()?->format('c')
@@ -362,42 +364,105 @@ class WorkflowController extends AbstractController
         summary: 'Sendet bestätigte E-Mail',
         parameters: [new OA\Parameter(name: 'stepId', in: 'path', required: true)]
     )]
-    public function sendEmail(int $stepId): JsonResponse
-    {
-        /** @var User $user */
-        $user = $this->getUser();
+    public function sendEmail(
+        int $stepId,
+        EntityManagerInterface $entityManager,
+        SendMailTool $sendMailTool, // Injiziere das Tool
+        LoggerInterface $logger
+    ): JsonResponse {
+        $step = $entityManager->getRepository(WorkflowStep::class)->find($stepId);
         
-        if (!$user) {
-            return $this->json(['error' => 'Authentication required'], Response::HTTP_UNAUTHORIZED);
-        }
-
-        $step = $this->em->getRepository(WorkflowStep::class)->find($stepId);
-
-        if (!$step || $step->getWorkflow()->getUser() !== $user) {
+        if (!$step) {
             return $this->json(['error' => 'Step not found'], Response::HTTP_NOT_FOUND);
         }
-
+        
         $workflow = $step->getWorkflow();
-
+        $user = $this->getUser();
+        
+        if (!$user || $workflow->getUser() !== $user) {
+            return $this->json(['error' => 'Unauthorized'], Response::HTTP_FORBIDDEN);
+        }
+        
+        $logger->info('Sending confirmed email', [
+            'step_id' => $stepId,
+            'user_id' => $user->getId()
+        ]);
+        
+        // Hole die vorbereiteten E-Mail-Details
+        $emailDetails = $step->getEmailDetails();
+        
+        if (!$emailDetails) {
+            return $this->json(['error' => 'No email details found'], Response::HTTP_BAD_REQUEST);
+        }
+        
         try {
-            // Direkt Executor aufrufen
-            $this->executor->confirmAndSendEmail($workflow, $step, $user);
-
-            return $this->json([
-                'status' => 'sent',
-                'workflow_status' => $workflow->getStatus(),
-                'message' => 'E-Mail erfolgreich gesendet'
-            ]);
-
+            // WICHTIG: Rufe das SendMailTool auf, um die E-Mail WIRKLICH zu versenden
+            $result = $sendMailTool(
+                to: $emailDetails['to'] ?? $emailDetails['recipient'] ?? '',
+                subject: $emailDetails['subject'] ?? '',
+                body: $emailDetails['body'] ?? '',
+                attachments: json_encode($emailDetails['attachments'] ?? [])
+            );
+            
+            $logger->info('SendMailTool result', ['result' => $result]);
+            
+            // Prüfe, ob der Versand erfolgreich war
+            if (($result['status'] ?? '') === 'success') {
+                // Aktualisiere den Step-Status
+                $step->setStatus('completed');
+                $step->setResult([
+                    'tool' => 'send_email',
+                    'status' => 'sent',
+                    'recipient' => $emailDetails['to'] ?? '',
+                    'sent_at' => (new \DateTime())->format(\DateTime::ATOM),
+                    'message' => $result['message'] ?? 'E-Mail erfolgreich versendet'
+                ]);
+                $step->setCompletedAt(new \DateTimeImmutable());
+                
+                $entityManager->flush();
+                
+                // Setze Workflow auf running, damit er weiter ausgeführt wird
+                $workflow->setStatus('running');
+                $workflow->setCurrentStep(null);
+                $entityManager->flush();
+                
+                // Führe den Workflow weiter aus
+                $this->executor->executeWorkflow($workflow, $user);
+               
+                
+                return $this->json([
+                    'success' => true,
+                    'message' => 'E-Mail erfolgreich versendet',
+                    'result' => $result
+                ]);
+                
+            } else {
+                // Versand fehlgeschlagen
+                $errorMessage = $result['message'] ?? 'Unbekannter Fehler beim E-Mail-Versand';
+                
+                $step->setStatus('failed');
+                $step->setErrorMessage($errorMessage);
+                $entityManager->flush();
+                
+                return $this->json([
+                    'success' => false,
+                    'error' => $errorMessage
+                ], Response::HTTP_INTERNAL_SERVER_ERROR);
+            }
+            
         } catch (\Exception $e) {
-            $this->logger->error('Email sending failed', [
-                'step_id' => $stepId,
-                'error' => $e->getMessage()
+            $logger->error('Exception during email send', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
-
+            
+            $step->setStatus('failed');
+            $step->setErrorMessage($e->getMessage());
+            $entityManager->flush();
+            
             return $this->json([
-                'error' => 'Failed to send email',
-                'message' => $e->getMessage()
+                'success' => false,
+                'error' => $e->getMessage()
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }

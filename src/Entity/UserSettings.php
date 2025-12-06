@@ -7,7 +7,7 @@ namespace App\Entity;
 use Doctrine\ORM\Mapping as ORM;
 use App\Repository\UserSettingsRepository;
 use Symfony\Component\Security\Core\User\UserInterface;
-
+use Symfony\Component\Serializer\Annotation\Ignore;
 #[ORM\Entity(repositoryClass: UserSettingsRepository::class)]
 #[ORM\Table(name: 'user_settings')]
 class UserSettings
@@ -19,6 +19,7 @@ class UserSettings
 
     #[ORM\OneToOne(targetEntity: User::class, inversedBy: 'userSettings', cascade: ['persist', 'remove'])]
     #[ORM\JoinColumn(nullable: false)]
+    #[Ignore]
     private ?User $user = null;
 
     // POP3 Settings

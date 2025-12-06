@@ -53,7 +53,7 @@ final class JobSearchTool
         
         string $employer = '',
         */
-        int $radius = 1,
+        int $radius = 25,
     ): array
     {
         $this->logger->info('JobSearchTool execution started', compact(
